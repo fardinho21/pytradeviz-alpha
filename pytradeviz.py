@@ -8,6 +8,8 @@ class PyTradeViz():
     canvas_width=900
     canvas_height=500
     canvas_color_bg="white"
+    price_limit=3000
+    date_range=(0,0)
 
     def __init__(self, tk, ttk):
 
@@ -53,7 +55,7 @@ class PyTradeViz():
             self.canvas.create_line(i, 0, i, 3000, dash=(5, 5))
         for i in range(0, 3025, 25):
             #horizontal
-            self.canvas_price.create_text(50, i, text=str(3000-i))
+            self.canvas_price.create_text(50, i, text=str(self.price_limit-i))
             self.canvas_price.create_line(0, i, 100, i, dash=(5, 5))
             self.canvas.create_line(0, i, 3000, i, dash=(5, 5))
 
