@@ -7,8 +7,11 @@ from pricedataprepper import PriceDataPrepper
 #Data Prepper
 pdp = PriceDataPrepper("./data/data.csv")
 
+print(pdp)
+
 #Visualizer 
 # ptz = PyTradeViz(tk, ttk)
+
 
 
 input()
