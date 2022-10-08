@@ -13,8 +13,11 @@ price_data = pdp.get_price_data_object()["price_data"]
 #     print(e)
 #     input()
 
+print(pdp)
+
 #Visualizer 
 ptz = PyTradeViz(tk, ttk)
+
 
 
 input()
