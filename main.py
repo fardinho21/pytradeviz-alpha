@@ -5,10 +5,11 @@ from pytradeviz import PyTradeViz
 from pricedataprepper import PriceDataPrepper
 
 #Data Prepper
-pdp = PriceDataPrepper("./data/data.csv")
+# pdp = PriceDataPrepper("./data/data.csv")
+# print(pdp)
 
 #Visualizer 
-# ptz = PyTradeViz(tk, ttk)
+ptz = PyTradeViz(tk, ttk)
 
 
 input()

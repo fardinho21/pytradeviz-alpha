@@ -3,17 +3,13 @@ from tkinter import ttk
 from tkinter.tix import COLUMN
 from turtle import width
 
-class PyTradeViz():
+class PyTradeViz:
 
     canvas_width=900
     canvas_height=500
     canvas_color_bg="white"
 
     def __init__(self, tk, ttk):
-
-        #styles
-        # self.style = ttk.Style()
-        # self.style.configure('fbg.TFrame', background="red")
 
         #set up window and frames
         self.window = self.initialize_window()
@@ -41,22 +37,20 @@ class PyTradeViz():
         self.canvas.grid(row=0, column=0, sticky="nse")
         self.canvas_price.grid(row=0, column=0, sticky="nsew")
         self.canvas_date.grid(row=0, column=0, sticky="ew")
-        # self.frame_canvas.grid_rowconfigure(0,weight=1)
-        # self.frame_canvas.grid_columnconfigure(0,weight=2)
-
 
         #render chart and price on canvas
         for i in range(0, 3075, 75):
-            #vertical
+            #render vertical lines
             self.canvas_date.create_line(i, 0, i, 50, dash=(5, 5))
-            self.canvas_date.create_text(i, 25, text="date")
             self.canvas.create_line(i, 0, i, 3000, dash=(5, 5))
+            #render dates
+            self.canvas_date.create_text(i, 25, text="date")
         for i in range(0, 3025, 25):
-            #horizontal
-            self.canvas_price.create_text(50, i, text=str(3000-i))
-            self.canvas_price.create_line(0, i, 100, i, dash=(5, 5))
+            #render horizontal lines 
             self.canvas.create_line(0, i, 3000, i, dash=(5, 5))
-
+            self.canvas_price.create_line(0, i, 100, i, dash=(5, 5))
+            #render price levels
+            self.canvas_price.create_text(50, i, text=str(3000-i))
 
         #event bind scrolling to mouse dragging
         self.canvas.bind("<ButtonPress-1>", self.scroll_start)
@@ -66,8 +60,6 @@ class PyTradeViz():
         self.canvas_date.bind("<ButtonPress-1>", self.scroll_start)
         self.canvas_date.bind("<B1-Motion>", self.scroll_move)
 
-
-        pass
 
     def initialize_window(self):       
         self.window = tk.Tk()
@@ -81,7 +73,6 @@ class PyTradeViz():
     def get_window(self):
         return self.window
         
-
     def get_canvas(self):
         return self.canvas
         pass
