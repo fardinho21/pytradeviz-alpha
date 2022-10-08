@@ -13,8 +13,11 @@ for e in price_data:
     print(e)
     input()
 
+print(pdp)
+
 #Visualizer 
 # ptz = PyTradeViz(tk, ttk)
+
 
 
 input()
