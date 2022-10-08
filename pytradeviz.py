@@ -1,7 +1,5 @@
 import tkinter as tk
 from tkinter import ttk
-from tkinter.tix import COLUMN
-from turtle import width
 
 class PyTradeViz:
 
