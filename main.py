@@ -9,9 +9,9 @@ pdp = PriceDataPrepper("./data/data.csv")
 price_data = pdp.get_price_data_object()["price_data"]
 
 
-for e in price_data:
-    print(e)
-    input()
+# for e in price_data:
+#     print(e)
+#     input()
 
 print(pdp)
 
