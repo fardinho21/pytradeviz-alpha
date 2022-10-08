@@ -23,7 +23,7 @@ class Candle:
         self.color=color
 
     def get_ohlc(self):
-        return [self.open, self.high, self.low,  self.close]
+        return [self.open, self.high, self.low,  self.close]    
     def set_ohlc(self, ohlc_ary):
         self.open=ohlc_ary[0]
         self.high=ohlc_ary[1]

@@ -18,7 +18,7 @@ class PriceDataPrepper:
         self.file_handle = open(file_path)
         self.csvreader = csv.reader(self.file_handle)
 
-        #skip lines
+        #skip lines / header
         for i in range(skip_lines):
             next(self.csvreader)
 
