@@ -4,19 +4,20 @@ from candle import Candle
 
 class PyTradeViz:
 
+    window_geo="1000x750"
+
     canvas_width=900
     canvas_height=500
     canvas_color_bg="white"
     price_limit=3000
-    date_range=(0,0)
 
-    chart_grid_space_x = 3000
-    chart_grid_space_y = 3000
-    chart_grid_divider_v = 25
-    chart_grid_divider_h = 75
+    chart_grid_space_x = 1000
+    chart_grid_space_y = 1000
+    chart_grid_divider_v = 75
+    chart_grid_divider_h = 25
     chart_layout_info = {}
 
-    def __init__(self, tk, ttk):
+    def __init__(self, tk, ttk, price_data=None):
 
         #set up window and frames
         self.initialize_window(tk)
@@ -43,22 +44,27 @@ class PyTradeViz:
         self.window = tk.Tk()
         self.window.configure(bg="black")
         self.window.title("PyTradeViz - Alpha")
-        self.window.geometry("1000x750")
+        self.window.geometry(self.window_geo)
         self.window.resizable(False, False) 
 
-    def initialize_charts(self):
-        for i in range(0, self.chart_grid_space_x, self.chart_grid_divider_h):
+    def initialize_charts(self, price_data=None):
+
+        for i in range(0, self.chart_grid_space_x + 25, self.chart_grid_divider_v):
             #render vertical lines
             self.canvas_date.create_line(i, 0, i, 50, dash=(5, 5))
-            self.canvas.create_line(i, 0, i, self.chart_grid_space_x, dash=(5, 5))
+            self.canvas.create_line(i, 0, i, self.chart_grid_space_y, dash=(5, 5))
             #render dates
-            self.canvas_date.create_text(i, 25, text="date")
-        for i in range(0, self.chart_grid_space_x, self.chart_grid_divider_v):
+            self.canvas_date.create_text(i, 25, text=str(i))
+            
+            # draw candles
+            c = Candle(100, 200, 25, 150)
+
+        for i in range(0, self.chart_grid_space_y, self.chart_grid_divider_h):
             #render horizontal lines 
             self.canvas.create_line(0, i, self.chart_grid_space_x, i, dash=(5, 5))
             self.canvas_price.create_line(0, i, 100, i, dash=(5, 5))
             #render price levels
-            self.canvas_price.create_text(50, i, text=str(self.chart_grid_space_x-i))
+            self.canvas_price.create_text(50, i, text=str(self.chart_grid_space_y-i))
 
     def initialize_canvases(self, tk):
         self.canvas= tk.Canvas(self.frame_canvas, width=self.canvas_width, height=self.canvas_height)

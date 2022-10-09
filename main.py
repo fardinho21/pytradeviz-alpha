@@ -16,7 +16,7 @@ price_data = pdp.get_price_data_object()["price_data"]
 print(pdp)
 
 #Visualizer 
-ptz = PyTradeViz(tk, ttk)
+ptz = PyTradeViz(tk, ttk, price_data)
 
 
 

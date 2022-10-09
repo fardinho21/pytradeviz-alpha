@@ -1,15 +1,14 @@
 
 class Candle:
-    
-    
-    
-    def __init__(self, open, high, low, close):
+        
+    def __init__(self, open, high, low, close, date):
         self.open=open
         self.high=high
         self.low=low
         self.close=close
         self.color="grey"
         self.body="solid"
+        self.date=date
 
         if open < close:
             self.color="red"
