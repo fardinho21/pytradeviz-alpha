@@ -55,10 +55,9 @@ class PyTradeViz:
             self.canvas.create_line(i, 0, i, self.chart_grid_space_y, dash=(5, 5))
             #render dates
             self.canvas_date.create_text(i, 25, text=str(i))
-            
-            # draw candles
-            c = Candle(100, 200, 25, 150)
 
+            #TODO: draw candles here
+            
         for i in range(0, self.chart_grid_space_y, self.chart_grid_divider_h):
             #render horizontal lines 
             self.canvas.create_line(0, i, self.chart_grid_space_x, i, dash=(5, 5))

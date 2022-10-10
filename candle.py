@@ -7,12 +7,15 @@ class Candle:
         self.low=low
         self.close=close
         self.color="grey"
-        self.body="solid"
+        self.body="hollow"
         self.date=date
 
         if open < close:
+            self.color="green"
+            self.body="solid"
+        elif close < open:
             self.color="red"
-            self.body="hollow"
+
         
     def get_body(self):
         return self.body
@@ -36,4 +39,26 @@ class Candle:
     Draw the candle on a tkinter canvas
     """
     def draw_candle(self, tk_canvas):
+        self.draw_high_low(tk_canvas)
+        self.draw_open_close(tk_canvas, True)
+        pass
+
+    """
+    Draw the high and low as a line
+    """
+    def draw_high_low(self, tk_canvas):
+        tk_canvas.create_line(self.date, self.high, self.date, self.low, fill=self.color, width=3)
+        pass
+
+    """
+    Draw open and close as a line 
+    """
+    def draw_open_close(self, tk_canvas, candle=False):
+        if candle:
+            fill= "" if (self.body == "hollow") else "green"
+                
+            tk_canvas.create_rectangle(self.date - 5, self.open, self.date + 5, self.close, fill=fill)
+        else:
+            tk_canvas.create_line(self.date, self.open, self.date, self.close, fill=self.color, width=3)
+
         pass
