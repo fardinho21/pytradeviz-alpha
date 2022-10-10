@@ -8,15 +8,17 @@ from pricedataprepper import PriceDataPrepper
 pdp = PriceDataPrepper("./data/data.csv")
 price_data = pdp.get_price_data_object()["price_data"]
 
-
 # for e in price_data:
 #     print(e)
 #     input()
 
-print(pdp)
+print(price_data[0])
+print(price_data[len(price_data) - 1])
+
+# print(pdp)
 
 #Visualizer 
-ptz = PyTradeViz(tk, ttk, price_data)
+# ptz = PyTradeViz(tk, ttk, price_data)
 
 
 
