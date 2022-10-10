@@ -1,6 +1,6 @@
 
 class Candle:
-        
+    candle_width=5
     def __init__(self, open, high, low, close, date):
         self.open=open
         self.high=high
@@ -57,7 +57,7 @@ class Candle:
         if candle:
             fill= "" if (self.body == "hollow") else "green"
                 
-            tk_canvas.create_rectangle(self.date - 5, self.open, self.date + 5, self.close, fill=fill)
+            tk_canvas.create_rectangle(self.date - self.candle_width, self.open, self.date + self.candle_width, self.close, fill=fill)
         else:
             tk_canvas.create_line(self.date, self.open, self.date, self.close, fill=self.color, width=3)
 
