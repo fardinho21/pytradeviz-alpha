@@ -8,7 +8,7 @@ class PriceDataPrepper:
     highest_price=0
     lowest_price=inf
     price_data=[]
-    date_range=()
+    number_of_days=0
 
     """
     :param <string> file_path: absolute or relative path to csv file
@@ -64,4 +64,12 @@ class PriceDataPrepper:
         price_data_object["price_data"] = self.price_data
         price_data_object["highest"]= self.highest_price
         price_data_object["lowest"]= self.lowest_price
+        
+        d1s = self.price_data[0][0]
+        d2s = self.price_data[len(self.price_data) - 1][0]
+
+        d1= datetime.date(int(d1s[0]), int(d1s[1]), int(d1s[2]))
+        d2= datetime.date(int(d2s[0]), int(d2s[1]), int(d2s[2]))
+
+        price_data_object["number_of_days"] = abs(d1 - d2).days
         return price_data_object
