@@ -14,7 +14,7 @@ class PriceDataPrepper:
     :param <string> file_path: absolute or relative path to csv file
     :param <int> skip_lines: number of header lines to skip
     """
-    def __init__(self, file_path, debug=False, skip_lines=2):
+    def __init__(self, file_path, debug=False, reverse=False, skip_lines=2):
 
         self.read_csv_file(file_path,skip_lines)
         
@@ -22,6 +22,9 @@ class PriceDataPrepper:
             print("Lowest: \n", self.lowest_price, "\nHighest: \n", self.highest_price)
         
         self.file_handle.close()
+
+        if reverse:
+            self.price_data.reverse()
 
     def __repr__(self):
         
@@ -54,6 +57,7 @@ class PriceDataPrepper:
 
             dohlc=(date_parsed, o, h, l, c)
             self.price_data.append(dohlc)
+
 
     """
     :return <dict> price_data_object: the a dictionary containing the prices, highest price, lowest price and the asset pair
