@@ -6,9 +6,8 @@ from pricedataprepper import PriceDataPrepper
 
 #Data Prepper
 pdp = PriceDataPrepper("./data/data.csv")
+price_data_object = pdp.get_price_data_object()
 price_data = pdp.get_price_data_object()["price_data"]
-number_of_days = pdp.get_price_data_object()["number_of_days"]
-print(number_of_days)
 
 # for e in price_data:
 #     print(e)
@@ -16,8 +15,8 @@ print(number_of_days)
 
 # print(pdp)
 
-#Visualizer 
-# ptz = PyTradeViz(tk, ttk, price_data)
+# Visualizer 
+ptz = PyTradeViz(tk, ttk, price_data_object)
 
 
 
