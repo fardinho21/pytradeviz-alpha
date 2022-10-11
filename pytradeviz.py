@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk
 from candle import Candle
+import datetime as datetime
 
 class PyTradeViz:
 
@@ -10,14 +11,22 @@ class PyTradeViz:
     canvas_height=500
     canvas_color_bg="white"
     price_limit=3000
-
-    chart_grid_space_x = 1000
+    price_data= None
+    #TODO: calculate chart_grid_space_x inside the init function.
+    #the value will equal to  (price_data_object["number_of_days"]) * ( Candle.candle_width ) + 1000 
+    chart_grid_space_x = 15000 
+    #TODO: calculate the chart_grid_space_y inside the init function
+    #the value will be equal to the highest p
     chart_grid_space_y = 1000
-    chart_grid_divider_v = 75
-    chart_grid_divider_h = 25
+    chart_grid_divider_v = 30
+    chart_grid_divider_h = 20
     chart_layout_info = {}
 
-    def __init__(self, tk, ttk, price_data=None):
+    def __init__(self, tk, ttk, price_data_object=None):
+
+        self.price_data=price_data_object["price_data"]
+
+        self.calculate_grid_space_x(price_data_object)
 
         #set up window and frames
         self.initialize_window(tk)
@@ -35,7 +44,13 @@ class PyTradeViz:
         self.configure_grid_layout()
 
         #render chart and price on canvas
-        self.initialize_charts()
+        self.initialize_charts(self.price_data)
+
+        #render candles
+        self.render_candles()
+
+        #render dates
+        self.render_dates()
 
         #event bind scrolling to mouse dragging
         self.event_bindings()
@@ -49,14 +64,11 @@ class PyTradeViz:
 
     def initialize_charts(self, price_data=None):
 
-        for i in range(0, self.chart_grid_space_x + 25, self.chart_grid_divider_v):
+        for i in range(0, self.chart_grid_space_x, self.chart_grid_divider_v):
             #render vertical lines
             self.canvas_date.create_line(i, 0, i, 50, dash=(5, 5))
             self.canvas.create_line(i, 0, i, self.chart_grid_space_y, dash=(5, 5))
             #render dates
-            self.canvas_date.create_text(i, 25, text=str(i))
-
-            #TODO: draw candles here
             
         for i in range(0, self.chart_grid_space_y, self.chart_grid_divider_h):
             #render horizontal lines 
@@ -90,6 +102,43 @@ class PyTradeViz:
         self.canvas.grid(row=0, column=0, sticky="nse")
         self.canvas_price.grid(row=0, column=0, sticky="nsew")
         self.canvas_date.grid(row=0, column=0, sticky="ew")
+
+    def render_candles(self):
+        for i in range(0, self.chart_grid_space_x, self.chart_grid_divider_v):
+            c=Candle(500, 650, 480, 580, i)
+            c.draw_candle(self.canvas)
+
+    def calculate_grid_space_x(self, price_data_object):
+        num_of_candles=price_data_object["number_of_candles"]
+        remains= (num_of_candles * 10) % 1000
+        if remains:
+            self.chart_grid_space_x = (num_of_candles * 10) - remains + 1000
+        else:
+            self.chart_grid_space_x= (num_of_candles * 10) + 10
+
+        print(self.chart_grid_space_x)
+
+    def render_dates(self):
+        y=""
+        m=""
+        d=""
+        for i in range(0, len(self.price_data) - 1):
+
+            iy = self.price_data[i][0][0]
+            im = self.price_data[i][0][1]
+            id = self.price_data[i][0][2]
+            
+            if im != str(m):
+                m = im
+                m_name = datetime.datetime.strptime(str(m), "%m").strftime("%b")
+
+                self.canvas_date.create_text(i*self.chart_grid_divider_v, 10, text=m_name)
+            if iy != str(y):
+                y = iy
+                self.canvas_date.create_text(i*self.chart_grid_divider_v, 20, text=str(iy)[2:])
+            else:
+                self.canvas_date.create_text(i*self.chart_grid_divider_v, 30, text=str(id))
+        pass
 
     def get_window(self):
         return self.window
