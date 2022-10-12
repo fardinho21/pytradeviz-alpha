@@ -58,7 +58,6 @@ class PriceDataPrepper:
             dohlc=(date_parsed, o, h, l, c)
             self.price_data.append(dohlc)
 
-
     """
     :return <dict> price_data_object: the a dictionary containing the prices, highest price, lowest price and the asset pair
     """
