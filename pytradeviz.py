@@ -111,8 +111,8 @@ class PyTradeViz:
 
     def render_candles(self):
         for i in range(0, self.chart_grid_space_x, self.chart_grid_divider_v):
-            c=Candle(500, 650, 480, 580, i)
-            c.draw_candle(self.canvas)
+            c=Candle(500, 650, 480, 580, i, 0.01/4)
+            c.draw_high_low(self.canvas)
 
     def calculate_grid_space_x(self, price_data_object):
         num_of_candles=price_data_object["number_of_candles"]
