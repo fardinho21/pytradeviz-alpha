@@ -5,7 +5,7 @@ from pytradeviz import PyTradeViz
 from pricedataprepper import PriceDataPrepper
 
 #Data Prepper
-pdp = PriceDataPrepper("./data/data.csv")
+pdp = PriceDataPrepper("./data/data.csv", reverse=True)
 price_data_object = pdp.get_price_data_object()
 price_data = pdp.get_price_data_object()["price_data"]
 
@@ -13,7 +13,7 @@ price_data = pdp.get_price_data_object()["price_data"]
 #     print(e)
 #     input()
 
-# print(pdp)
+print(pdp)
 
 # Visualizer 
 ptz = PyTradeViz(tk, ttk, price_data_object)
