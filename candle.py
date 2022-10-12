@@ -1,7 +1,9 @@
 
 class Candle:
     candle_width=5
-    def __init__(self, open, high, low, close, date):
+    cents_per_pixle=0
+
+    def __init__(self, open, high, low, close, date, cppx=0):
         self.open=open
         self.high=high
         self.low=low
@@ -9,6 +11,12 @@ class Candle:
         self.color="grey"
         self.body="hollow"
         self.date=date
+        self.cents_per_pixle=cppx
+
+        self.render_open=(open*100)/cppx
+        self.render_high=(high*100)/cppx
+        self.render_low=(low*100)/cppx
+        self.render_close=(close*100)/cppx
 
         if open < close:
             self.color="green"
@@ -47,7 +55,7 @@ class Candle:
     Draw the high and low as a line
     """
     def draw_high_low(self, tk_canvas):
-        tk_canvas.create_line(self.date, self.high, self.date, self.low, fill=self.color, width=3)
+        tk_canvas.create_line(self.date, self.render_high, self.date, self.render_low, fill=self.color, width=3)
         pass
 
     """
