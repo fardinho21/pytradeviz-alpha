@@ -17,7 +17,7 @@ class PyTradeViz:
     chart_grid_space_x = 15000 
     #TODO: calculate the chart_grid_space_y inside the init function
     #the value will be equal to the highest p
-    chart_grid_space_y = 1000
+    chart_grid_space_y = 1500
     chart_grid_divider_v = 30
     chart_grid_divider_h = 20
     chart_layout_info = {}
@@ -69,13 +69,19 @@ class PyTradeViz:
             self.canvas_date.create_line(i, 0, i, 50, dash=(5, 5))
             self.canvas.create_line(i, 0, i, self.chart_grid_space_y, dash=(5, 5))
             #render dates
-            
+        
+        upperlimit=3
+        incrementer=upperlimit/(upperlimit*self.chart_grid_divider_h)
+        price_level=upperlimit
+
         for i in range(0, self.chart_grid_space_y, self.chart_grid_divider_h):
             #render horizontal lines 
             self.canvas.create_line(0, i, self.chart_grid_space_x, i, dash=(5, 5))
             self.canvas_price.create_line(0, i, 100, i, dash=(5, 5))
             #render price levels
-            self.canvas_price.create_text(50, i, text=str(self.chart_grid_space_y-i))
+            plrender="{:.2f}".format(price_level)
+            self.canvas_price.create_text(50, i, text=plrender)
+            price_level-=incrementer
 
     def initialize_canvases(self, tk):
         self.canvas= tk.Canvas(self.frame_canvas, width=self.canvas_width, height=self.canvas_height)
@@ -118,6 +124,9 @@ class PyTradeViz:
 
         print(self.chart_grid_space_x)
 
+    def calculate_(self):
+        pass
+
     def render_dates(self):
         y=""
         m=""
@@ -135,7 +144,7 @@ class PyTradeViz:
                 self.canvas_date.create_text(i*self.chart_grid_divider_v, 10, text=m_name)
             if iy != str(y):
                 y = iy
-                self.canvas_date.create_text(i*self.chart_grid_divider_v, 20, text=str(iy)[2:])
+                self.canvas_date.create_text(i*self.chart_grid_divider_v, 30, text="Y"+str(iy)[2:])
             else:
                 self.canvas_date.create_text(i*self.chart_grid_divider_v, 30, text=str(id))
         pass
