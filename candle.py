@@ -3,7 +3,7 @@ class Candle:
     candle_width=5
     cents_per_pixle=0
 
-    def __init__(self, open, high, low, close, date, cppx=0):
+    def __init__(self, open, high, low, close, date, dppx=0):
         self.open=open
         self.high=high
         self.low=low
@@ -11,12 +11,12 @@ class Candle:
         self.color="grey"
         self.body="hollow"
         self.date=date
-        self.cents_per_pixle=cppx
+        self.cents_per_pixle=dppx
 
-        self.render_open=(open*100)/cppx
-        self.render_high=(high*100)/cppx
-        self.render_low=(low*100)/cppx
-        self.render_close=(close*100)/cppx
+        self.render_open=1000-(open)/dppx
+        self.render_high=1000-(high)/dppx
+        self.render_low=1000-(low)/dppx
+        self.render_close=1000-(close)/dppx
 
         if open < close:
             self.color="green"
@@ -63,10 +63,8 @@ class Candle:
     """
     def draw_open_close(self, tk_canvas, candle=False):
         if candle:
-            fill= "" if (self.body == "hollow") else "green"
-                
-            tk_canvas.create_rectangle(self.date - self.candle_width, self.open, self.date + self.candle_width, self.close, fill=fill)
+            tk_canvas.create_rectangle(self.date - self.candle_width, self.render_open, self.date + self.candle_width, self.render_close, fill=self.color)
         else:
-            tk_canvas.create_line(self.date, self.open, self.date, self.close, fill=self.color, width=3)
+            tk_canvas.create_line(self.date, self.render_open, self.date, self.render_close, fill=self.color, width=3)
 
         pass

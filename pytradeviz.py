@@ -17,10 +17,11 @@ class PyTradeViz:
     chart_grid_space_x = 15000 
     #TODO: calculate the chart_grid_space_y inside the init function
     #the value will be equal to the highest p
-    chart_grid_space_y = 1500
+    chart_grid_space_y = 1000
     chart_grid_divider_v = 30
-    chart_grid_divider_h = 20
+    chart_grid_divider_h = 20 #20px/price_level
     chart_layout_info = {}
+    incrementer=0
 
     def __init__(self, tk, ttk, price_data_object=None):
 
@@ -68,10 +69,9 @@ class PyTradeViz:
             #render vertical lines
             self.canvas_date.create_line(i, 0, i, 50, dash=(5, 5))
             self.canvas.create_line(i, 0, i, self.chart_grid_space_y, dash=(5, 5))
-            #render dates
         
-        upperlimit=3
-        incrementer=upperlimit/(upperlimit*self.chart_grid_divider_h)
+        upperlimit=1.65
+        self.incrementer=upperlimit*(self.chart_grid_divider_h/self.chart_grid_space_y)
         price_level=upperlimit
 
         for i in range(0, self.chart_grid_space_y, self.chart_grid_divider_h):
@@ -81,7 +81,10 @@ class PyTradeViz:
             #render price levels
             plrender="{:.2f}".format(price_level)
             self.canvas_price.create_text(50, i, text=plrender)
-            price_level-=incrementer
+            price_level-=self.incrementer
+
+        print(len(self.price_data))
+        
 
     def initialize_canvases(self, tk):
         self.canvas= tk.Canvas(self.frame_canvas, width=self.canvas_width, height=self.canvas_height)
@@ -110,9 +113,11 @@ class PyTradeViz:
         self.canvas_date.grid(row=0, column=0, sticky="ew")
 
     def render_candles(self):
-        for i in range(0, self.chart_grid_space_x, self.chart_grid_divider_v):
-            c=Candle(500, 650, 480, 580, i, 0.01/4)
-            c.draw_high_low(self.canvas)
+        for i in range(0, len(self.price_data)):
+            pd=self.price_data[i]
+            c=Candle(pd[1], pd[2], pd[3], pd[4], i*self.chart_grid_divider_v, self.incrementer/self.chart_grid_divider_h)
+            c.draw_candle(self.canvas)
+
 
     def calculate_grid_space_x(self, price_data_object):
         num_of_candles=price_data_object["number_of_candles"]
@@ -130,7 +135,6 @@ class PyTradeViz:
     def render_dates(self):
         y=""
         m=""
-        d=""
         for i in range(0, len(self.price_data) - 1):
 
             iy = self.price_data[i][0][0]
