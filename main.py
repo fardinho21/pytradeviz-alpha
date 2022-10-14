@@ -3,6 +3,7 @@ from tkinter import ttk
 from candle import Candle
 from pytradeviz import PyTradeViz
 from pricedataprepper import PriceDataPrepper
+from indicators import Indicators
 
 #Data Prepper
 pdp = PriceDataPrepper("./data/data.csv", reverse=True)

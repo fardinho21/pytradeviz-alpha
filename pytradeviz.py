@@ -3,6 +3,7 @@ from tkinter import ttk
 from turtle import width
 from candle import Candle
 import datetime as datetime
+from indicators import Indicators
 
 class PyTradeViz:
 
@@ -24,9 +25,13 @@ class PyTradeViz:
     chart_layout_info = {}
     incrementer=0
 
+    indicators_object = Indicators()
+
     def __init__(self, tk, ttk, price_data_object=None):
 
         self.price_data=price_data_object["price_data"]
+        self.indicators_object.set_price_data(self.price_data)
+        self.indicators_object.calculate_RSI_full()
 
         self.calculate_grid_space_x(price_data_object)
 
@@ -54,8 +59,13 @@ class PyTradeViz:
         #render dates
         self.render_dates()
 
+        self.render_indicators()
+
         #event bind scrolling to mouse dragging
         self.event_bindings()
+
+        #set price data for indicators_objec 
+
 
     def initialize_window(self, tk):
         self.window = tk.Tk()
@@ -71,6 +81,7 @@ class PyTradeViz:
             self.canvas_date.create_line(i, 0, i, 50, dash=(5, 5))
             self.canvas.create_line(i, 0, i, self.chart_grid_space_y, dash=(5, 5))
             self.canvas_indicators.create_line(i, 0, i, 100, dash=(5, 5))
+
         
         upperlimit=1.65
         self.incrementer=upperlimit*(self.chart_grid_divider_h/self.chart_grid_space_y)
@@ -84,6 +95,9 @@ class PyTradeViz:
             plrender="{:.2f}".format(price_level)
             self.canvas_price.create_text(50, i, text=plrender)
             price_level-=self.incrementer
+
+            self.canvas_indicators.create_line(0, 70, self.chart_grid_space_x, 70, fill="orange", width=2)
+            self.canvas_indicators.create_line(0, 30, self.chart_grid_space_x, 30, fill="blue", width=2)
 
         print(len(self.price_data))
         
@@ -126,6 +140,7 @@ class PyTradeViz:
             c.draw_candle(self.canvas)
 
     def render_indicators(self):
+        self.indicators_object.render_RSI(self.canvas_indicators, self.chart_grid_divider_v)
         pass
 
     def calculate_grid_space_x(self, price_data_object):

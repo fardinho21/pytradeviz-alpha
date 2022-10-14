@@ -55,7 +55,7 @@ class PriceDataPrepper:
             if l < self.lowest_price:
                 self.lowest_price = l
 
-            dohlc=(date_parsed, o, h, l, c)
+            dohlc=[date_parsed, o, h, l, c]
             self.price_data.append(dohlc)
 
     """
