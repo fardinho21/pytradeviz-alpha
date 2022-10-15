@@ -1,6 +1,5 @@
 import tkinter as tk
 from tkinter import ttk
-from turtle import width
 from candle import Candle
 import datetime as datetime
 from indicators import Indicators
@@ -14,6 +13,7 @@ class PyTradeViz:
     canvas_color_bg="white"
     price_limit=3000
     price_data= None
+    price_data_object=None
     #TODO: calculate chart_grid_space_x inside the init function.
     #the value will equal to  (price_data_object["number_of_days"]) * ( Candle.candle_width ) + 1000 
     chart_grid_space_x = 15000 
@@ -29,6 +29,7 @@ class PyTradeViz:
 
     def __init__(self, tk, ttk, price_data_object=None):
 
+        self.price_data_object=price_data_object
         self.price_data=price_data_object["price_data"]
         self.indicators_object.set_price_data(self.price_data)
         self.indicators_object.calculate_RSI_full()
@@ -66,7 +67,6 @@ class PyTradeViz:
 
         #set price data for indicators_objec 
 
-
     def initialize_window(self, tk):
         self.window = tk.Tk()
         self.window.configure(bg="black")
@@ -83,7 +83,7 @@ class PyTradeViz:
             self.canvas_indicators.create_line(i, 0, i, 100, dash=(5, 5))
 
         
-        upperlimit=1.65
+        upperlimit=1.60
         self.incrementer=upperlimit*(self.chart_grid_divider_h/self.chart_grid_space_y)
         price_level=upperlimit
 
@@ -149,7 +149,7 @@ class PyTradeViz:
         if remains:
             self.chart_grid_space_x = (num_of_candles * 10) - remains + 1000
         else:
-            self.chart_grid_space_x= (num_of_candles * 10) + 10
+            self.chart_grid_space_x = (num_of_candles * 10) + 10
 
         print(self.chart_grid_space_x)
 
