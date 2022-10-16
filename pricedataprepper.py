@@ -39,11 +39,13 @@ class PriceDataPrepper:
 
         self.file_handle = open(file_path)
         self.csvreader = csv.reader(self.file_handle)
-        
+
         #skip lines
         for i in range(skip_lines):
             next(self.csvreader)
         
+        indi = {"rsi": 0, "ema": 0, "sma": 0}
+
         #read in price data
         for r in self.csvreader:
             o, h ,l ,c =float(r[3]), float(r[4]), float(r[5]), float(r[6]) 
@@ -55,7 +57,7 @@ class PriceDataPrepper:
             if l < self.lowest_price:
                 self.lowest_price = l
 
-            dohlc=[date_parsed, o, h, l, c]
+            dohlc=[date_parsed, o, h, l, c, dict(indi)]
             self.price_data.append(dohlc)
 
     """

@@ -19,8 +19,8 @@ class Indicators:
             row = self.price_data[i]
             pos = divider_v*i
             
-            if len(row) == 6:
-                rsi = row[5]
+            if row[5]["rsi"]:
+                rsi = row[5]["rsi"]
 
                 if first:
                     tk_indicators_canvas.create_line(0, 100, pos, 100 - rsi, fill="black")
@@ -82,7 +82,7 @@ class Indicators:
                 avg_loss_updated = False
 
                 rsi = self.calculate_RSI(running_avg_gain, running_avg_loss)
-                self.price_data[i].append(rsi)
+                self.price_data[i][5]["rsi"] = rsi
 
         for e in self.price_data:
             print(e)
@@ -109,7 +109,7 @@ class Indicators:
 
         rsi = self.calculate_RSI(avg_gain_one, avg_loss_one)
 
-        self.price_data[period - 1].append(rsi)
+        self.price_data[period - 1][5]["rsi"] = rsi
 
         return [avg_gain_one, avg_loss_one, rsi]
 
