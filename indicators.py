@@ -6,28 +6,32 @@ class Indicators:
 
     def __init__(self, tk_canvas=None, price_data=None):
         self.price_data=price_data
+        self._rsi_state = None
         pass
 
     def set_price_data(self, price_data):
         self.price_data=price_data
+        self._rsi_state = None
 
-    def render_RSI(self, tk_indicators_canvas, divider_v):
-        first = True
-        previous = []
+    def render_RSI(self, tk_indicators_canvas, divider_v, offset_x=0,
+                   start=0, tags=()):
+        previous = None
+        for i in range(start - 1, -1, -1):
+            if self.price_data[i][5]["rsi"]:
+                previous = (offset_x + divider_v * i, self.price_data[i][5]["rsi"])
+                break
         
-        for i in range(len(self.price_data)):
+        for i in range(start, len(self.price_data)):
             row = self.price_data[i]
-            pos = divider_v*i
+            pos = offset_x + divider_v*i
             
             if row[5]["rsi"]:
                 rsi = row[5]["rsi"]
 
-                if first:
-                    tk_indicators_canvas.create_line(0, 100, pos, 100 - rsi, fill="black")
-                    first = False
-
-                else: 
-                    tk_indicators_canvas.create_line(previous[0], 100 - previous[1], pos, 100 - rsi, fill="black")
+                if previous is None:
+                    tk_indicators_canvas.create_line(offset_x, 100, pos, 100 - rsi, fill="black", tags=tags)
+                else:
+                    tk_indicators_canvas.create_line(previous[0], 100 - previous[1], pos, 100 - rsi, fill="black", tags=tags)
 
                 previous = [pos, rsi]
         pass
@@ -39,26 +43,30 @@ class Indicators:
         pass
 
     def calculate_RSI(self, avg_gain, avg_loss):
+        if avg_loss == 0:
+            return 100 if avg_gain > 0 else 0
         return 100 - (100/ (1 + (avg_gain/avg_loss)))
 
     def calculate_RSI_full(self, period=7):
-        
-        avg_gain_updated = False
-        avg_loss_updated = False
+        self._rsi_state = None
+        self.calculate_RSI_incremental(period)
 
-        #step one 
-        gainloss = self.RSI_step_one(period)
-        
-        prev_avg_gain = gainloss[0]
-        prev_avg_loss = gainloss[1]
+    def calculate_RSI_incremental(self, period=7):
+        if len(self.price_data) < period:
+            return
+        if self._rsi_state is None:
+            gainloss = self.RSI_step_one(period)
+            self._rsi_state = {
+                "period": period, "next_index": period,
+                "prev_gain": gainloss[0], "prev_loss": gainloss[1],
+                "running_gain": 0, "running_loss": 0,
+                "gain_updated": False, "loss_updated": False,
+            }
+        state = self._rsi_state
+        if state["period"] != period:
+            raise ValueError("RSI period cannot change during incremental calculation")
 
-        running_avg_loss = 0
-        running_avg_gain = 0
-
-        window_s = period
-
-        #step two
-        for i in range(window_s, len(self.price_data)):
+        for i in range(state["next_index"], len(self.price_data)):
             rsi = 0
 
             data_row = self.price_data[i]
@@ -66,26 +74,22 @@ class Indicators:
             close = data_row[4]
 
             if open < close:
-                avg_gain_updated = True
-                running_avg_gain = close - open
-                running_avg_gain = (prev_avg_gain * (period - 1) + (running_avg_gain))/period
-                prev_avg_gain = running_avg_gain
+                state["gain_updated"] = True
+                state["running_gain"] = (state["prev_gain"] * (period - 1) + close - open) / period
+                state["prev_gain"] = state["running_gain"]
 
             elif open > close:
-                avg_loss_updated = True
-                running_avg_loss = open - close
-                running_avg_loss = (prev_avg_loss * (period - 1) + (running_avg_loss))/period
-                prev_avg_loss = running_avg_loss
+                state["loss_updated"] = True
+                state["running_loss"] = (state["prev_loss"] * (period - 1) + open - close) / period
+                state["prev_loss"] = state["running_loss"]
 
-            if avg_gain_updated and avg_loss_updated:
-                avg_gain_updated = False
-                avg_loss_updated = False
+            if state["gain_updated"] and state["loss_updated"]:
+                state["gain_updated"] = False
+                state["loss_updated"] = False
 
-                rsi = self.calculate_RSI(running_avg_gain, running_avg_loss)
+                rsi = self.calculate_RSI(state["running_gain"], state["running_loss"])
                 self.price_data[i][5]["rsi"] = rsi
-
-        for e in self.price_data:
-            print(e)
+        state["next_index"] = len(self.price_data)
 
     def RSI_step_one(self, period):
 
