@@ -6,7 +6,9 @@ from indicators import Indicators
 
 class PyTradeViz:
 
-    window_geo="1000x750"
+    window_geo="1020x750"
+    window_min_width=1020
+    window_min_height=750
 
     canvas_width=900
     canvas_height=500
@@ -14,8 +16,6 @@ class PyTradeViz:
     price_limit=3000
     price_data= None
     price_data_object=None
-    #TODO: calculate chart_grid_space_x inside the init function.
-    #the value will equal to  (price_data_object["number_of_days"]) * ( Candle.candle_width ) + 1000 
     chart_grid_space_x = 15000 
     #TODO: calculate the chart_grid_space_y inside the init function
     #the value will be equal to the highest p
@@ -45,6 +45,9 @@ class PyTradeViz:
         # set up canvas
         self.initialize_canvases(tk)
 
+        # set up scrollbars
+        self.initialize_scrollbars(ttk, tk)
+
         # configure
         self.configure_all_canvas()
 
@@ -62,6 +65,9 @@ class PyTradeViz:
 
         self.render_indicators()
 
+        self._last_canvas_width = self.canvas_width
+        self._last_canvas_height = self.canvas_height
+
         #event bind scrolling to mouse dragging
         self.event_bindings()
 
@@ -72,7 +78,8 @@ class PyTradeViz:
         self.window.configure(bg="black")
         self.window.title("PyTradeViz - Alpha")
         self.window.geometry(self.window_geo)
-        self.window.resizable(False, False) 
+        self.window.minsize(self.window_min_width, self.window_min_height)
+        self.window.resizable(True, True)
 
     def initialize_charts(self, price_data=None):
 
@@ -107,6 +114,14 @@ class PyTradeViz:
         self.canvas_date = tk.Canvas(self.frame_canvas_date, width=self.canvas_width, height=50)
         self.canvas_indicators= tk.Canvas(self.frame_canvas_indicators, width=self.canvas_width, height=100)
 
+    def initialize_scrollbars(self, ttk, tk):
+        self.scrollbar_horizontal = ttk.Scrollbar(
+            self.window, orient=tk.HORIZONTAL, command=self.scroll_xview
+        )
+        self.scrollbar_vertical = ttk.Scrollbar(
+            self.window, orient=tk.VERTICAL, command=self.scroll_yview
+        )
+
     def initialize_frames(self, ttk):
         self.frame_canvas = ttk.Frame(self.window, width=self.canvas_width, height=self.canvas_height)
         self.frame_canvas_indicators = ttk.Frame(self.window, width=self.canvas_width, height=100)
@@ -118,17 +133,34 @@ class PyTradeViz:
         self.canvas_price.configure(background=self.canvas_color_bg)
         self.canvas_date.configure(background=self.canvas_color_bg)
         self.canvas_indicators.configure(background=self.canvas_color_bg)
-        self.canvas.configure(scrollregion=(0,0,self.chart_grid_space_x,self.chart_grid_space_y))
-        self.canvas_price.configure(scrollregion=(0,0,100,self.chart_grid_space_y))
-        self.canvas_date.configure(scrollregion=(0,0,self.chart_grid_space_x,50))
-        self.canvas_indicators.configure(scrollregion=(0,0, self.chart_grid_space_x, 100))
+        self.canvas.configure(
+            scrollregion=(0, 0, self.chart_grid_space_x, self.chart_grid_space_y),
+            xscrollcommand=self.sync_horizontal_scroll,
+            yscrollcommand=self.sync_vertical_scroll,
+        )
+        self.canvas_price.configure(scrollregion=(0, 0, 100, self.chart_grid_space_y))
+        self.canvas_date.configure(scrollregion=(0, 0, self.chart_grid_space_x, 50))
+        self.canvas_indicators.configure(
+            scrollregion=(0, 0, self.chart_grid_space_x, 100)
+        )
 
     def configure_grid_layout(self):
-        self.frame_canvas.grid()
+        self.window.grid_columnconfigure(0, weight=1)
+        self.window.grid_rowconfigure(0, weight=1)
+        self.frame_canvas.grid_columnconfigure(0, weight=1)
+        self.frame_canvas.grid_rowconfigure(0, weight=1)
+        self.frame_canvas_price.grid_columnconfigure(0, weight=1)
+        self.frame_canvas_price.grid_rowconfigure(0, weight=1)
+        self.frame_canvas_date.grid_columnconfigure(0, weight=1)
+        self.frame_canvas_indicators.grid_columnconfigure(0, weight=1)
+
+        self.frame_canvas.grid(row=0, column=0, sticky="nsew")
         self.frame_canvas_price.grid(row=0, column=1, sticky="ns")
-        self.frame_canvas_date.grid(row=1, sticky="ew")
-        self.frame_canvas_indicators.grid(row=2, sticky="ew")
-        self.canvas.grid(row=0, column=0, sticky="nse")
+        self.frame_canvas_date.grid(row=1, column=0, sticky="ew")
+        self.frame_canvas_indicators.grid(row=2, column=0, sticky="ew")
+        self.scrollbar_horizontal.grid(row=3, column=0, sticky="ew")
+        self.scrollbar_vertical.grid(row=0, column=2, sticky="ns")
+        self.canvas.grid(row=0, column=0, sticky="nsew")
         self.canvas_price.grid(row=0, column=0, sticky="nsew")
         self.canvas_date.grid(row=0, column=0, sticky="ew")
         self.canvas_indicators.grid(row=0, column=0, sticky="ew")
@@ -144,14 +176,11 @@ class PyTradeViz:
         pass
 
     def calculate_grid_space_x(self, price_data_object):
-        num_of_candles=price_data_object["number_of_candles"]
-        remains= (num_of_candles * 10) % 1000
-        if remains:
-            self.chart_grid_space_x = (num_of_candles * 10) - remains + 1000
-        else:
-            self.chart_grid_space_x = (num_of_candles * 10) + 10
-
-        print(self.chart_grid_space_x)
+        num_of_candles = len(price_data_object["price_data"])
+        rendered_width = (
+            num_of_candles * self.chart_grid_divider_v + Candle.candle_width
+        )
+        self.chart_grid_space_x = max(self.canvas_width, rendered_width)
 
     def calculate_(self):
         pass
@@ -184,24 +213,86 @@ class PyTradeViz:
         return self.canvas
         pass
 
+    def scroll_xview(self, *args):
+        self.canvas.xview(*args)
+
+    def scroll_yview(self, *args):
+        self.canvas.yview(*args)
+
+    def sync_horizontal_scroll(self, first, last):
+        self.scrollbar_horizontal.set(first, last)
+        self.canvas_date.xview_moveto(first)
+        self.canvas_indicators.xview_moveto(first)
+
+    def sync_vertical_scroll(self, first, last):
+        self.scrollbar_vertical.set(first, last)
+        self.canvas_price.yview_moveto(first)
+
     def scroll_start(self, event):
-        self.canvas_price.scan_mark(0, event.y)
-        self.canvas_date.scan_mark(event.x, 0)
-        self.canvas.scan_mark(event.x, event.y)
-        self.canvas_indicators.scan_mark(event.x, 0)
+        if event.widget is self.canvas:
+            self.canvas.scan_mark(event.x, event.y)
+        elif event.widget is self.canvas_price:
+            self.canvas.scan_mark(0, event.y)
+        else:
+            self.canvas.scan_mark(event.x, 0)
 
     def scroll_move(self, event):
-        self.canvas.scan_dragto(event.x, event.y, gain=1)
-        self.canvas_date.scan_dragto(event.x, 0, gain=1)
-        self.canvas_price.scan_dragto(0, event.y, gain=1)
-        self.canvas_indicators.scan_dragto(event.x, 0, gain=1)
+        if event.widget is self.canvas:
+            self.canvas.scan_dragto(event.x, event.y, gain=1)
+        elif event.widget is self.canvas_price:
+            self.canvas.scan_dragto(0, event.y, gain=1)
+        else:
+            self.canvas.scan_dragto(event.x, 0, gain=1)
 
     def event_bindings(self):
         self.canvas.bind("<ButtonPress-1>", self.scroll_start)
         self.canvas.bind("<B1-Motion>", self.scroll_move)
+        self.canvas.bind("<Configure>", self.resize_chart)
         self.canvas_price.bind("<ButtonPress-1>", self.scroll_start)
         self.canvas_price.bind("<B1-Motion>", self.scroll_move)
         self.canvas_date.bind("<ButtonPress-1>", self.scroll_start)
         self.canvas_date.bind("<B1-Motion>", self.scroll_move)
         self.canvas_indicators.bind("<ButtonPress-1>", self.scroll_start)
         self.canvas_indicators.bind("<B1-Motion>", self.scroll_move)
+
+    def resize_chart(self, event):
+        width = event.width
+        height = event.height
+        if width <= 1 or height <= 1:
+            return
+
+        scale_x = width / self._last_canvas_width
+        scale_y = height / self._last_canvas_height
+        if scale_x == 1 and scale_y == 1:
+            return
+
+        horizontal_position = self.canvas.xview()[0]
+        vertical_position = self.canvas.yview()[0]
+
+        self.canvas.scale("all", 0, 0, scale_x, scale_y)
+        self.canvas_price.scale("all", 0, 0, 1, scale_y)
+        self.canvas_date.scale("all", 0, 0, scale_x, 1)
+        self.canvas_indicators.scale("all", 0, 0, scale_x, 1)
+
+        self._last_canvas_width = width
+        self._last_canvas_height = height
+        self.chart_grid_space_x *= scale_x
+        self.chart_grid_space_y *= scale_y
+
+        self.canvas.configure(
+            scrollregion=(
+                0, 0, self.chart_grid_space_x, self.chart_grid_space_y
+            )
+        )
+        self.canvas_price.configure(
+            scrollregion=(0, 0, 100, self.chart_grid_space_y)
+        )
+        self.canvas_date.configure(
+            scrollregion=(0, 0, self.chart_grid_space_x, 50)
+        )
+        self.canvas_indicators.configure(
+            scrollregion=(0, 0, self.chart_grid_space_x, 100)
+        )
+
+        self.canvas.xview_moveto(horizontal_position)
+        self.canvas.yview_moveto(vertical_position)
