@@ -17,8 +17,8 @@ class Candle:
         self.high=high
         self.low=low
         self.close=close
-        self.color="grey"
-        self.body="hollow"
+        self.color=Candle.color_for(open, close)
+        self.body="solid" if open < close else "hollow"
         self.date=date
         self.cents_per_pixle=dppx
         self.tags = tags
@@ -28,13 +28,14 @@ class Candle:
         self.render_low=price_origin-(low)/dppx
         self.render_close=price_origin-(close)/dppx
 
+    @staticmethod
+    def color_for(open: float, close: float) -> str:
         if open < close:
-            self.color="green"
-            self.body="solid"
-        elif close < open:
-            self.color="red"
+            return "green"
+        if close < open:
+            return "red"
+        return "grey"
 
-        
     def get_body(self) -> str:
         return self.body
     def set_body(self, body: str) -> None:
@@ -56,9 +57,9 @@ class Candle:
     """
     Draw the candle on a tkinter canvas
     """
-    def draw_candle(self, tk_canvas: tk.Canvas) -> None:
+    def draw_candle(self, tk_canvas: tk.Canvas, hollow: bool = False) -> None:
         self.draw_high_low(tk_canvas)
-        self.draw_open_close(tk_canvas, True)
+        self.draw_open_close(tk_canvas, True, hollow)
         pass
 
     """
@@ -71,10 +72,24 @@ class Candle:
     """
     Draw open and close as a line 
     """
-    def draw_open_close(self, tk_canvas: tk.Canvas, candle: bool = False) -> None:
+    def draw_open_close(self, tk_canvas: tk.Canvas, candle: bool = False, hollow: bool = False) -> None:
         if candle:
-            tk_canvas.create_rectangle(self.date - self.candle_width, self.render_open, self.date + self.candle_width, self.render_close, fill=self.color, tags=self.tags)
+            item = tk_canvas.create_rectangle(self.date - self.candle_width, self.render_open, self.date + self.candle_width, self.render_close, fill=self.color, outline="black", tags=self.tags)
+            Candle.style_body(tk_canvas, item, hollow, self.color)
         else:
             tk_canvas.create_line(self.date, self.render_open, self.date, self.render_close, fill=self.color, width=3, tags=self.tags)
 
         pass
+
+    """
+    Switch an existing candle body between solid and hollow in the given color.
+    A hollow body is filled with the chart background so the wick behind it
+    stays hidden. Solid bodies have a black outline and hollow bodies have a
+    candle-colored one.
+    """
+    @staticmethod
+    def style_body(tk_canvas: tk.Canvas, item: int, hollow: bool, color: str) -> None:
+        if hollow:
+            tk_canvas.itemconfigure(item, fill=tk_canvas.cget("background"), outline=color)
+        else:
+            tk_canvas.itemconfigure(item, fill=color, outline="black")

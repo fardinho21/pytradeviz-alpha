@@ -4,7 +4,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 import csv
 from types import ModuleType
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
 from candle import Candle
 import datetime as datetime
 import math
@@ -26,7 +26,19 @@ class PyTradeViz:
 
     canvas_width: int = 900
     canvas_height: int = 500
-    canvas_color_bg: str = "white"
+    window_color: str = "black"
+    light_theme: Dict[str, str] = {
+        "canvas": "white", "ink": "black", "grid": "black",
+        "crosshair": "black", "crosshair_text": "white",
+        "selection": "#8c8c8c", "highlight": "#ffffff",
+    }
+    dark_theme: Dict[str, str] = {
+        "canvas": "black", "ink": "white", "grid": "#4a4a4a",
+        "crosshair": "#f4a261", "crosshair_text": "black",
+        "selection": "#e0894f", "highlight": "#f4a261",
+    }
+    dark_mode: bool = False
+    crosshair_root: Optional[Tuple[int, int]] = None
     price_limit: int = 3000
     price_data: Optional[List[List[Any]]] = None
     price_data_object: Optional[Dict[str, Any]] = None
@@ -58,6 +70,7 @@ class PyTradeViz:
     scrollbar_horizontal: ttk.Scrollbar
     scrollbar_vertical: ttk.Scrollbar
     load_more_button: ttk.Button
+    dark_mode_button: ttk.Button
     data_source: Optional[PriceDataSource]
     indicators_object: Indicators
     zoom_level: float
@@ -71,6 +84,20 @@ class PyTradeViz:
     price_lower: float
     _data_lowest: float
     _data_highest: float
+    candle_info_label: tk.Label
+    _press_position: Optional[Tuple[int, int]] = None
+    click_drag_threshold: int = 5
+    selection_mode: bool = False
+    selected_indices: Set[int]
+    # Box as (left x, right x, top price, bottom price). x is unscaled so the
+    # box follows the candles through zoom and resize.
+    _selection_box: Optional[Tuple[float, float, float, float]] = None
+    _box_origin: Optional[Tuple[float, float]] = None
+    _box_current: Optional[Tuple[float, float]] = None
+    select_mode_label: tk.Label
+    select_button: ttk.Button
+    select_icon: Any
+    select_label_y: int = 0
 
     def __init__(
         self, tk: ModuleType, ttk: ModuleType,
@@ -80,6 +107,7 @@ class PyTradeViz:
 
         self.price_data_object=price_data_object
         self.price_data=price_data_object["price_data"]
+        self.selected_indices = set()
         self.data_source = data_source
         self.indicators_object = Indicators()
         self.indicators_object.set_price_data(self.price_data)
@@ -97,10 +125,13 @@ class PyTradeViz:
 
         # set up canvas
         self.initialize_canvases(tk)
+        self.initialize_candle_info(tk)
 
         # set up scrollbars
         self.initialize_scrollbars(ttk, tk)
-
+        self.initialize_dark_mode_button(ttk)
+        self.initialize_select_mode_button(ttk, tk)
+        self.initialize_select_mode_label(tk)
         # configure
         self.configure_all_canvas()
 
@@ -132,7 +163,7 @@ class PyTradeViz:
 
     def initialize_window(self, tk: ModuleType) -> None:
         self.window = tk.Tk()
-        self.window.configure(bg="black")
+        self.window.configure(bg=self.window_color)
         self.window.title("PyTradeViz - Alpha")
         self.window.geometry(self.window_geo)
         self.window.minsize(self.window_min_width, self.window_min_height)
@@ -140,11 +171,13 @@ class PyTradeViz:
 
     def initialize_charts(self, price_data: Optional[List[List[Any]]] = None) -> None:
 
+        ink = self.get_theme()["ink"]
+        grid = self.get_theme()["grid"]
         for i in range(0, self.chart_grid_space_x, self.chart_grid_divider_v):
             #render vertical lines
-            self.canvas_date.create_line(i, 0, i, 50, dash=(5, 5))
-            self.canvas.create_line(i, 0, i, self.chart_grid_space_y, dash=(5, 5))
-            self.canvas_indicators.create_line(i, 0, i, 100, dash=(5, 5))
+            self.canvas_date.create_line(i, 0, i, 50, dash=(5, 5), fill=grid, tags=("grid",))
+            self.canvas.create_line(i, 0, i, self.chart_grid_space_y, dash=(5, 5), fill=grid, tags=("grid",))
+            self.canvas_indicators.create_line(i, 0, i, 100, dash=(5, 5), fill=grid, tags=("grid",))
 
         
         self.incrementer = (
@@ -156,15 +189,15 @@ class PyTradeViz:
         for i in range(0, self.chart_grid_space_y, self.chart_grid_divider_h):
             #render horizontal lines 
             self.canvas.create_line(
-                0, i, self.chart_grid_space_x, i, dash=(5, 5),
-                tags=("horizontal_grid",)
+                0, i, self.chart_grid_space_x, i, dash=(5, 5), fill=grid,
+                tags=("horizontal_grid", "grid")
             )
-            self.canvas_price.create_line(0, i, 100, i, dash=(5, 5))
+            self.canvas_price.create_line(0, i, 100, i, dash=(5, 5), fill=grid, tags=("grid",))
             #render price levels
             plrender="{:.2f}".format(price_level)
             self.canvas_price.create_text(
                 50, i, text=plrender, anchor="n" if i == 0 else "center",
-                tags=("price_label",)
+                fill=ink, tags=("price_label", "ink")
             )
             price_level-=self.incrementer
 
@@ -191,7 +224,7 @@ class PyTradeViz:
             self.window, orient=tk.VERTICAL, command=self.scroll_yview
         )
         self.load_more_button = ttk.Button(
-            self.window, text=">", command=self.load_more_data
+            self.window, text=">", width=1, command=self.load_more_data
         )
         if self.data_source is None or not self.data_source.has_more:
             self.load_more_button.state(["disabled"])
@@ -203,10 +236,10 @@ class PyTradeViz:
         self.frame_canvas_date = ttk.Frame(self.window, width=self.canvas_width, height=50)
 
     def configure_all_canvas(self) -> None:
-        self.canvas.configure(background=self.canvas_color_bg)
-        self.canvas_price.configure(background=self.canvas_color_bg)
-        self.canvas_date.configure(background=self.canvas_color_bg)
-        self.canvas_indicators.configure(background=self.canvas_color_bg)
+        self.canvas.configure(background=self.get_theme()["canvas"])
+        self.canvas_price.configure(background=self.get_theme()["canvas"])
+        self.canvas_date.configure(background=self.get_theme()["canvas"])
+        self.canvas_indicators.configure(background=self.get_theme()["canvas"])
         self.canvas.configure(
             scrollregion=(0, 0, self.chart_grid_space_x, self.chart_grid_space_y),
             xscrollcommand=self.sync_horizontal_scroll,
@@ -249,7 +282,9 @@ class PyTradeViz:
         self.frame_canvas_date.grid(row=1, column=0, sticky="ew")
         self.frame_canvas_indicators.grid(row=2, column=0, sticky="ew")
         self.scrollbar_horizontal.grid(row=3, column=0, sticky="ew")
-        self.load_more_button.grid(row=3, column=1, columnspan=2, sticky="e")
+        self.load_more_button.grid(row=2, column=1, sticky="nsw")
+        self.select_button.grid(row=3, column=1, sticky="nsw")
+        self.dark_mode_button.grid(row=1, column=1, sticky="nsw")
         self.scrollbar_vertical.grid(row=0, column=2, sticky="ns")
         self.canvas.grid(row=0, column=0, sticky="nsew")
         self.canvas_price.grid(row=0, column=0, sticky="nsew")
@@ -264,14 +299,14 @@ class PyTradeViz:
                 pd[1], pd[2], pd[3], pd[4],
                 self.chart_padding_x + i*self.chart_grid_divider_v,
                 price_per_pixel, self.price_upper / price_per_pixel,
-                tags=("candle",) + tags
+                tags=("candle", f"candle_{i}") + tags
             )
-            c.draw_candle(self.canvas)
+            c.draw_candle(self.canvas, hollow=self.dark_mode)
 
     def render_indicators(self, start: int = 0, tags: Tuple[str, ...] = ()) -> None:
         self.indicators_object.render_RSI(
             self.canvas_indicators, self.chart_grid_divider_v, self.chart_padding_x,
-            start=start, tags=("rsi",) + tags
+            start=start, tags=("rsi", "ink") + tags, fill=self.get_theme()["ink"]
         )
         pass
 
@@ -301,6 +336,7 @@ class PyTradeViz:
         pass
 
     def render_dates(self, start: int = 0, tags: Tuple[str, ...] = ()) -> None:
+        ink = self.get_theme()["ink"]
         y = self.price_data[start - 1][0][0] if start else ""
         m = self.price_data[start - 1][0][1] if start else ""
         for i in range(start, len(self.price_data)):
@@ -313,16 +349,89 @@ class PyTradeViz:
                 m = im
                 m_name = datetime.datetime.strptime(str(m), "%m").strftime("%b")
 
-                self.canvas_date.create_text(self.chart_padding_x + i*self.chart_grid_divider_v, 10, text=m_name, tags=tags)
+                self.canvas_date.create_text(self.chart_padding_x + i*self.chart_grid_divider_v, 10, text=m_name, fill=ink, tags=("ink",) + tags)
             if iy != str(y):
                 y = iy
-                self.canvas_date.create_text(self.chart_padding_x + i*self.chart_grid_divider_v, 30, text="Y"+str(iy)[2:], tags=tags)
+                self.canvas_date.create_text(self.chart_padding_x + i*self.chart_grid_divider_v, 30, text="Y"+str(iy)[2:], fill=ink, tags=("ink",) + tags)
             else:
-                self.canvas_date.create_text(self.chart_padding_x + i*self.chart_grid_divider_v, 30, text=str(id), tags=tags)
+                self.canvas_date.create_text(self.chart_padding_x + i*self.chart_grid_divider_v, 30, text=str(id), fill=ink, tags=("ink",) + tags)
         pass
 
     def get_window(self) -> tk.Tk:
         return self.window
+
+    def get_theme(self) -> Dict[str, str]:
+        return self.dark_theme if self.dark_mode else self.light_theme
+
+    def initialize_dark_mode_button(self, ttk: ModuleType) -> None:
+        self.dark_mode_button = ttk.Button(
+            self.window, text="☀" if self.dark_mode else "☾", width=1,
+            command=self.toggle_dark_mode,
+        )
+
+    def initialize_select_mode_button(self, ttk: ModuleType, tk: ModuleType) -> None:
+        # Black in both themes, matching the other button icons.
+        self.select_icon = self.make_candle_group_icon(tk, self.light_theme["ink"])
+        self.select_button = ttk.Button(
+            self.window, image=self.select_icon,
+            command=self.toggle_selection_mode,
+        )
+
+    def make_candle_group_icon(self, tk: ModuleType, ink: str) -> Any:
+        icon = tk.PhotoImage(master=self.window, width=18, height=18)
+        # (center x, wick top, wick bottom, body top, body bottom)
+        for cx, wick_top, wick_bottom, body_top, body_bottom in (
+            (4, 2, 16, 6, 12), (9, 1, 17, 4, 10), (14, 4, 14, 7, 13)
+        ):
+            icon.put(ink, to=(cx, wick_top, cx + 1, wick_bottom + 1))
+            icon.put(ink, to=(cx - 1, body_top, cx + 2, body_bottom + 1))
+        return icon
+
+    def initialize_select_mode_label(self, tk: ModuleType) -> None:
+        theme = self.get_theme()
+        self.select_mode_label = tk.Label(
+            self.frame_canvas, text="select mode enabled", justify="left",
+            anchor="w", bg=theme["canvas"], fg=theme["ink"], relief="solid",
+            bd=1, padx=6, pady=4,
+        )
+        self.select_mode_label.place_forget()
+        # Sit just below the OHLC box, which always has the same height.
+        self.candle_info_label.configure(text="x\nO: 0\nH: 0\nL: 0\nC: 0")
+        self.candle_info_label.update_idletasks()
+        self.select_label_y = 8 + self.candle_info_label.winfo_reqheight() + 8
+
+    def toggle_selection_mode(self) -> None:
+        self.selection_mode = not self.selection_mode
+        if self.selection_mode:
+            self.select_mode_label.place(
+                relx=1.0, x=-8, y=self.select_label_y, anchor="ne"
+            )
+            self.select_mode_label.lift()
+            self.select_button.state(["pressed"])
+        else:
+            self.select_mode_label.place_forget()
+            self.select_button.state(["!pressed"])
+            self._box_origin = None
+            if self.selected_indices or self._selection_box is not None:
+                self.set_selection(set(), None)
+
+    def toggle_dark_mode(self) -> None:
+        self.dark_mode = not self.dark_mode
+        self.apply_theme()
+
+    def apply_theme(self) -> None:
+        theme = self.get_theme()
+        for canvas in (
+            self.canvas, self.canvas_price, self.canvas_date, self.canvas_indicators
+        ):
+            canvas.configure(background=theme["canvas"])
+            canvas.itemconfigure("ink", fill=theme["ink"])
+            canvas.itemconfigure("grid", fill=theme["grid"])
+        self.restyle_candles()
+        self.candle_info_label.configure(bg=theme["canvas"], fg=theme["ink"])
+        self.select_mode_label.configure(bg=theme["canvas"], fg=theme["ink"])
+        self.dark_mode_button.configure(text="☀" if self.dark_mode else "☾")
+        self.draw_overlays()
 
     def load_more_data(self) -> None:
         if self.data_source is None or not self.data_source.has_more:
@@ -368,18 +477,20 @@ class PyTradeViz:
         self._base_chart_width = new_base_width
         self.chart_grid_space_x *= self._scale_x
         start_grid = math.ceil(old_base_width / self.chart_grid_divider_v)
+        grid = self.get_theme()["grid"]
         for i in range(
             start_grid * self.chart_grid_divider_v,
             new_base_width, self.chart_grid_divider_v
         ):
             self.canvas.create_line(
-                i, 0, i, self.base_chart_height, dash=(5, 5), tags=("new_page",)
+                i, 0, i, self.base_chart_height, dash=(5, 5), fill=grid,
+                tags=("new_page", "grid")
             )
             self.canvas_date.create_line(
-                i, 0, i, 50, dash=(5, 5), tags=("new_page",)
+                i, 0, i, 50, dash=(5, 5), fill=grid, tags=("new_page", "grid")
             )
             self.canvas_indicators.create_line(
-                i, 0, i, 100, dash=(5, 5), tags=("new_page",)
+                i, 0, i, 100, dash=(5, 5), fill=grid, tags=("new_page", "grid")
             )
 
         self.render_candles(old_count, tags=("new_page",))
@@ -408,6 +519,7 @@ class PyTradeViz:
         )
         if not self.data_source.has_more:
             self.load_more_button.state(["disabled"])
+        self.draw_overlays()
         
     def get_canvas(self) -> tk.Canvas:
         return self.canvas
@@ -423,12 +535,20 @@ class PyTradeViz:
         self.scrollbar_horizontal.set(first, last)
         self.canvas_date.xview_moveto(first)
         self.canvas_indicators.xview_moveto(first)
+        self.draw_overlays()
 
     def sync_vertical_scroll(self, first: float, last: float) -> None:
         self.scrollbar_vertical.set(first, last)
         self.canvas_price.yview_moveto(first)
+        self.draw_overlays()
 
     def scroll_start(self, event: tk.Event) -> None:
+        self._press_position = (event.x, event.y)
+        if self.selection_mode:
+            if event.widget is self.canvas:
+                self._box_origin = (self.canvas.canvasx(event.x), self.canvas.canvasy(event.y))
+                self._box_current = self._box_origin
+            return
         if event.widget is self.canvas:
             self.canvas.scan_mark(event.x, event.y)
         elif event.widget is self.canvas_price:
@@ -437,15 +557,286 @@ class PyTradeViz:
             self.canvas.scan_mark(event.x, 0)
 
     def scroll_move(self, event: tk.Event) -> None:
+        self.crosshair_root = (event.x_root, event.y_root)
+        if self.selection_mode:
+            if self._box_origin is not None:
+                self._box_current = (
+                    self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
+                )
+                self._selection_box = self.box_from_canvas(
+                    self._box_origin, self._box_current
+                )
+                self.draw_overlays()
+            return
         if event.widget is self.canvas:
             self.canvas.scan_dragto(event.x, event.y, gain=1)
         elif event.widget is self.canvas_price:
             self.canvas.scan_dragto(0, event.y, gain=1)
         else:
             self.canvas.scan_dragto(event.x, 0, gain=1)
+        self.draw_crosshair()
+
+    def initialize_candle_info(self, tk: ModuleType) -> None:
+        self.candle_info_label = tk.Label(
+            self.frame_canvas, justify="left", anchor="w",
+            bg=self.get_theme()["canvas"], fg=self.get_theme()["ink"],
+            relief="solid", bd=1, padx=6, pady=4,
+        )
+        self.candle_info_label.place_forget()
+
+    def candle_index_at(self, x: float, y: float, tolerance: int = 4) -> Optional[int]:
+        for item in self.canvas.find_overlapping(
+            x - tolerance, y - tolerance, x + tolerance, y + tolerance
+        ):
+            for tag in self.canvas.gettags(item):
+                if tag.startswith("candle_"):
+                    return int(tag[len("candle_"):])
+        return None
+
+    def show_candle_info(self, index: int) -> None:
+        date, open_, high, low, close = self.price_data[index][:5]
+        self.candle_info_label.config(
+            text=f"{'-'.join(date)}\nO: {open_}\nH: {high}\nL: {low}\nC: {close}"
+        )
+        self.candle_info_label.place(relx=1.0, x=-8, y=8, anchor="ne")
+        self.candle_info_label.lift()
+
+    def select_candle(self, event: tk.Event) -> None:
+        if self.selection_mode:
+            self.finish_box_select(event)
+            return
+        if self._press_position is None:
+            return
+        press_x, press_y = self._press_position
+        if abs(event.x - press_x) + abs(event.y - press_y) > self.click_drag_threshold:
+            return
+        index = self.candle_index_at(
+            self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
+        )
+        if index is not None:
+            self.show_candle_info(index)
+
+    def track_crosshair(self, event: tk.Event) -> None:
+        self.crosshair_root = (event.x_root, event.y_root)
+        self.draw_crosshair()
+
+    def hide_crosshair(self, _event: tk.Event) -> None:
+        self.crosshair_root = None
+        self.clear_crosshair()
+
+    def clear_crosshair(self) -> None:
+        for canvas in (
+            self.canvas, self.canvas_price, self.canvas_date, self.canvas_indicators
+        ):
+            canvas.delete("crosshair")
+
+    def cursor_in_x_range(self, canvas: tk.Canvas, root_x: int) -> bool:
+        return 0 <= root_x - canvas.winfo_rootx() < canvas.winfo_width()
+
+    def cursor_in_y_range(self, canvas: tk.Canvas, root_y: int) -> bool:
+        return 0 <= root_y - canvas.winfo_rooty() < canvas.winfo_height()
+
+    def date_index_at(self, chart_x: float) -> Optional[int]:
+        base_x = chart_x / self._scale_x
+        index = round((base_x - self.chart_padding_x) / self.chart_grid_divider_v)
+        return index if 0 <= index < len(self.price_data) else None
+
+    def price_at(self, chart_y: float) -> float:
+        span = self.price_upper - self.price_lower
+        return self.price_upper - chart_y * span / self.chart_grid_space_y
+
+    def draw_crosshair_label(
+        self, canvas: tk.Canvas, x: float, y: float, text: str, anchor: str,
+        fill: str, text_fill: str,
+    ) -> None:
+        label = canvas.create_text(
+            x, y, text=text, anchor=anchor, fill=text_fill, tags=("crosshair",)
+        )
+        x1, y1, x2, y2 = canvas.bbox(label)
+        box = canvas.create_rectangle(
+            x1 - 3, y1 - 2, x2 + 3, y2 + 2, fill=fill, outline=fill,
+            tags=("crosshair",),
+        )
+        canvas.tag_raise(label, box)
+
+    def draw_crosshair(self) -> None:
+        if self.crosshair_root is None or not self.price_data:
+            return
+        self.clear_crosshair()
+
+        theme = self.get_theme()
+        line_color, text_color = theme["crosshair"], theme["crosshair_text"]
+        root_x, root_y = self.crosshair_root
+        show_vertical = self.cursor_in_x_range(self.canvas, root_x)
+        show_horizontal = self.cursor_in_y_range(self.canvas, root_y)
+        if not show_vertical and not show_horizontal:
+            return
+
+        chart_x = self.canvas.canvasx(root_x - self.canvas.winfo_rootx())
+        chart_y = self.canvas.canvasy(root_y - self.canvas.winfo_rooty())
+
+        if show_vertical:
+            for canvas in (self.canvas, self.canvas_date, self.canvas_indicators):
+                x = canvas.canvasx(root_x - canvas.winfo_rootx())
+                canvas.create_line(
+                    x, canvas.canvasy(0), x, canvas.canvasy(canvas.winfo_height()),
+                    fill=line_color, width=1, tags=("crosshair",),
+                )
+        if show_horizontal:
+            self.canvas.create_line(
+                self.canvas.canvasx(0), chart_y,
+                self.canvas.canvasx(self.canvas.winfo_width()), chart_y,
+                fill=line_color, width=1, tags=("crosshair",),
+            )
+            price_y = self.canvas_price.canvasy(
+                root_y - self.canvas_price.winfo_rooty()
+            )
+            self.canvas_price.create_line(
+                self.canvas_price.canvasx(0), price_y,
+                self.canvas_price.canvasx(self.canvas_price.winfo_width()), price_y,
+                fill=line_color, width=1, tags=("crosshair",),
+            )
+            self.draw_crosshair_label(
+                self.canvas_price,
+                self.canvas_price.canvasx(self.canvas_price.winfo_width()) - 2,
+                price_y, f"{self.price_at(chart_y):.2f}", "e",
+                line_color, text_color,
+            )
+
+        if show_vertical:
+            index = self.date_index_at(chart_x)
+            if index is not None:
+                date = "-".join(self.price_data[index][0])
+                self.draw_crosshair_label(
+                    self.canvas, chart_x, self.canvas.canvasy(0) + 4,
+                    date, "n", line_color, text_color,
+                )
+
+    def blend_colors(self, first: str, second: str, amount: float) -> str:
+        first_rgb = [c >> 8 for c in self.window.winfo_rgb(first)]
+        second_rgb = [c >> 8 for c in self.window.winfo_rgb(second)]
+        mixed = [round(a * (1 - amount) + b * amount) for a, b in zip(first_rgb, second_rgb)]
+        return "#%02x%02x%02x" % tuple(mixed)
+
+    def highlight_color(self, base: str) -> str:
+        return self.blend_colors(base, self.get_theme()["highlight"], 0.5)
+
+    def candle_index_of(self, item: int) -> Optional[int]:
+        for tag in self.canvas.gettags(item):
+            if tag.startswith("candle_"):
+                return int(tag[len("candle_"):])
+        return None
+
+    def style_candle_item(self, item: int, index: int) -> None:
+        _, open_, _, _, close = self.price_data[index][:5]
+        color = Candle.color_for(open_, close)
+        if index in self.selected_indices:
+            color = self.highlight_color(color)
+        if self.canvas.type(item) == "rectangle":
+            Candle.style_body(self.canvas, item, self.dark_mode, color)
+        else:
+            self.canvas.itemconfigure(item, fill=color)
+
+    def restyle_candles(self, indices: Optional[Set[int]] = None) -> None:
+        for item in self.canvas.find_withtag("candle"):
+            index = self.candle_index_of(item)
+            if index is None or (indices is not None and index not in indices):
+                continue
+            self.style_candle_item(item, index)
+
+    def price_to_y(self, price: float) -> float:
+        span = self.price_upper - self.price_lower
+        return (self.price_upper - price) * self.chart_grid_space_y / span
+
+    def box_from_canvas(
+        self, first: Tuple[float, float], second: Tuple[float, float]
+    ) -> Tuple[float, float, float, float]:
+        x1, x2 = sorted((first[0], second[0]))
+        y1, y2 = sorted((first[1], second[1]))
+        return (x1 / self._scale_x, x2 / self._scale_x,
+                self.price_at(y1), self.price_at(y2))
+
+    def clear_selection_box(self) -> None:
+        self.canvas.delete("selection")
+
+    def draw_selection_box(self) -> None:
+        if self._selection_box is None:
+            return
+        self.clear_selection_box()
+        left, right, top, bottom = self._selection_box
+        color = self.get_theme()["selection"]
+        self.canvas.create_rectangle(
+            left * self._scale_x, self.price_to_y(top),
+            right * self._scale_x, self.price_to_y(bottom),
+            fill=color, stipple="gray50", outline=color, dash=(4, 4), width=1,
+            tags=("selection",),
+        )
+        # Keep the tint under the candles so their highlight colors stay visible.
+        if self.canvas.find_withtag("candle"):
+            self.canvas.tag_lower("selection", "candle")
+
+    def draw_overlays(self) -> None:
+        self.draw_selection_box()
+        self.draw_crosshair()
+
+    def candle_indices_in(self, x1: float, y1: float, x2: float, y2: float) -> Set[int]:
+        indices: Set[int] = set()
+        for item in self.canvas.find_overlapping(x1, y1, x2, y2):
+            index = self.candle_index_of(item)
+            if index is not None:
+                indices.add(index)
+        return indices
+
+    def finish_box_select(self, event: tk.Event) -> None:
+        origin = self._box_origin
+        self._box_origin = None
+        if origin is None or self._press_position is None:
+            return
+        press_x, press_y = self._press_position
+        if abs(event.x - press_x) + abs(event.y - press_y) <= self.click_drag_threshold:
+            index = self.candle_index_at(*origin)
+            self.set_selection({index} if index is not None else set(), None)
+            return
+        current = self._box_current or origin
+        x1, x2 = sorted((origin[0], current[0]))
+        y1, y2 = sorted((origin[1], current[1]))
+        self.set_selection(
+            self.candle_indices_in(x1, y1, x2, y2),
+            self.box_from_canvas(origin, current),
+        )
+
+    def set_selection(self, indices: Set[int], box: Optional[Tuple[float, float, float, float]]) -> None:
+        changed = self.selected_indices ^ indices
+        self.selected_indices = set(indices)
+        self._selection_box = box
+        self.restyle_candles(changed)
+        self.clear_selection_box()
+        self.draw_overlays()
+        if self.selected_indices:
+            self.show_selection_summary()
+        else:
+            self.candle_info_label.place_forget()
+
+    def show_selection_summary(self) -> None:
+        indices = sorted(self.selected_indices)
+        rows = [self.price_data[i] for i in indices]
+        count = len(rows)
+        averages = [round(sum(row[k] for row in rows) / count, 4) for k in (1, 2, 3, 4)]
+        first_date = "-".join(rows[0][0])
+        if count == 1:
+            header = first_date
+        else:
+            header = f"{first_date} to {'-'.join(rows[-1][0])} ({count} candles)"
+        open_, high, low, close = averages
+        self.candle_info_label.config(
+            text=f"{header}\nO_avg: {open_}\nH_avg: {high}\nL_avg: {low}\nC_avg: {close}"
+        )
+        self.candle_info_label.place(relx=1.0, x=-8, y=8, anchor="ne")
+        self.candle_info_label.lift()
 
     def event_bindings(self) -> None:
         self.canvas.bind("<ButtonPress-1>", self.scroll_start)
+        self.canvas.bind("<ButtonRelease-1>", self.select_candle)
         self.canvas.bind("<B1-Motion>", self.scroll_move)
         self.canvas.bind("<Configure>", self.resize_chart)
         self.canvas.bind("<Control-MouseWheel>", self.zoom_chart)
@@ -472,6 +863,8 @@ class PyTradeViz:
             canvas.bind("<Shift-MouseWheel>", self.scale_candle_height)
             canvas.bind("<Shift-Button-4>", self.scale_candle_height)
             canvas.bind("<Shift-Button-5>", self.scale_candle_height)
+            canvas.bind("<Motion>", self.track_crosshair)
+            canvas.bind("<Leave>", self.hide_crosshair)
 
     def resize_chart(self, event: tk.Event) -> None:
         width = event.width
@@ -503,6 +896,7 @@ class PyTradeViz:
 
         self.canvas.xview_moveto(horizontal_position)
         self.canvas.yview_moveto(vertical_position)
+        self.draw_overlays()
 
     def wheel_scale_factor(self, event: tk.Event) -> Optional[float]:
         if hasattr(event, "delta") and event.delta:
@@ -541,6 +935,7 @@ class PyTradeViz:
         self.candle_height_scale = new_scale
         self.update_scroll_regions()
         self.canvas.yview_moveto(max(0, new_top / self.chart_grid_space_y))
+        self.draw_overlays()
         return "break"
 
     def zoom_chart(self, event: tk.Event) -> str:
@@ -590,4 +985,5 @@ class PyTradeViz:
         self.update_scroll_regions()
         self.canvas.xview_moveto(max(0, new_left / self.chart_grid_space_x))
         self.canvas.yview_moveto(max(0, new_top / self.chart_grid_space_y))
+        self.draw_overlays()
         return "break"

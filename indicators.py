@@ -25,7 +25,7 @@ class Indicators:
 
     def render_RSI(self, tk_indicators_canvas: tk.Canvas, divider_v: float,
                    offset_x: float = 0, start: int = 0,
-                   tags: Tuple[str, ...] = ()) -> None:
+                   tags: Tuple[str, ...] = (), fill: str = "black") -> None:
         previous = None
         for i in range(start - 1, -1, -1):
             if self.price_data[i][5]["rsi"]:
@@ -40,9 +40,9 @@ class Indicators:
                 rsi = row[5]["rsi"]
 
                 if previous is None:
-                    tk_indicators_canvas.create_line(offset_x, 100, pos, 100 - rsi, fill="black", tags=tags)
+                    tk_indicators_canvas.create_line(offset_x, 100, pos, 100 - rsi, fill=fill, tags=tags)
                 else:
-                    tk_indicators_canvas.create_line(previous[0], 100 - previous[1], pos, 100 - rsi, fill="black", tags=tags)
+                    tk_indicators_canvas.create_line(previous[0], 100 - previous[1], pos, 100 - rsi, fill=fill, tags=tags)
 
                 previous = [pos, rsi]
         pass
