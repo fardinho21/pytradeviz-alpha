@@ -1,20 +1,31 @@
 
+from __future__ import annotations
+
+import tkinter as tk
+from typing import Any, Dict, List, Optional, Tuple
+
 class Indicators:
 
-    price_data=None
+    price_data: Optional[List[List[Any]]] = None
+    _rsi_state: Optional[Dict[str, Any]] = None
 
 
-    def __init__(self, tk_canvas=None, price_data=None):
+    def __init__(
+        self,
+        tk_canvas: Optional[tk.Canvas] = None,
+        price_data: Optional[List[List[Any]]] = None,
+    ) -> None:
         self.price_data=price_data
         self._rsi_state = None
         pass
 
-    def set_price_data(self, price_data):
+    def set_price_data(self, price_data: List[List[Any]]) -> None:
         self.price_data=price_data
         self._rsi_state = None
 
-    def render_RSI(self, tk_indicators_canvas, divider_v, offset_x=0,
-                   start=0, tags=()):
+    def render_RSI(self, tk_indicators_canvas: tk.Canvas, divider_v: float,
+                   offset_x: float = 0, start: int = 0,
+                   tags: Tuple[str, ...] = ()) -> None:
         previous = None
         for i in range(start - 1, -1, -1):
             if self.price_data[i][5]["rsi"]:
@@ -36,22 +47,22 @@ class Indicators:
                 previous = [pos, rsi]
         pass
 
-    def render_SMA(self):
+    def render_SMA(self) -> None:
         pass
 
-    def render_EMA(self):
+    def render_EMA(self) -> None:
         pass
 
-    def calculate_RSI(self, avg_gain, avg_loss):
+    def calculate_RSI(self, avg_gain: float, avg_loss: float) -> float:
         if avg_loss == 0:
             return 100 if avg_gain > 0 else 0
         return 100 - (100/ (1 + (avg_gain/avg_loss)))
 
-    def calculate_RSI_full(self, period=7):
+    def calculate_RSI_full(self, period: int = 7) -> None:
         self._rsi_state = None
         self.calculate_RSI_incremental(period)
 
-    def calculate_RSI_incremental(self, period=7):
+    def calculate_RSI_incremental(self, period: int = 7) -> None:
         if len(self.price_data) < period:
             return
         if self._rsi_state is None:
@@ -67,7 +78,7 @@ class Indicators:
             raise ValueError("RSI period cannot change during incremental calculation")
 
         for i in range(state["next_index"], len(self.price_data)):
-            rsi = 0
+            rsi: float = 0
 
             data_row = self.price_data[i]
             open = data_row[1]
@@ -91,10 +102,10 @@ class Indicators:
                 self.price_data[i][5]["rsi"] = rsi
         state["next_index"] = len(self.price_data)
 
-    def RSI_step_one(self, period):
+    def RSI_step_one(self, period: int) -> List[float]:
 
-        avg_gain_one = 0
-        avg_loss_one = 0
+        avg_gain_one: float = 0
+        avg_loss_one: float = 0
 
         #find avg gain and loss
         for i in range(period):
@@ -117,8 +128,8 @@ class Indicators:
 
         return [avg_gain_one, avg_loss_one, rsi]
 
-    def calculate_SMA(self, period=7):
+    def calculate_SMA(self, period: int = 7) -> None:
         pass
 
-    def calculate_EMA(self, period=7):
+    def calculate_EMA(self, period: int = 7) -> None:
         pass

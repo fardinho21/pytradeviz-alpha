@@ -1,9 +1,18 @@
 
-class Candle:
-    candle_width=5
-    cents_per_pixle=0
+from __future__ import annotations
 
-    def __init__(self, open, high, low, close, date, dppx=0, price_origin=1000, tags=()):
+import tkinter as tk
+from typing import List, Sequence, Tuple
+
+
+class Candle:
+    candle_width: int = 5
+    cents_per_pixle: float = 0
+
+    def __init__(
+        self, open: float, high: float, low: float, close: float, date: float,
+        dppx: float = 0, price_origin: float = 1000, tags: Tuple[str, ...] = (),
+    ) -> None:
         self.open=open
         self.high=high
         self.low=low
@@ -26,19 +35,19 @@ class Candle:
             self.color="red"
 
         
-    def get_body(self):
+    def get_body(self) -> str:
         return self.body
-    def set_body(self, body):
+    def set_body(self, body: str) -> None:
         self.body=body
 
-    def get_color(self):
+    def get_color(self) -> str:
         return self.color
-    def set_color(self, color):
+    def set_color(self, color: str) -> None:
         self.color=color
 
-    def get_ohlc(self):
+    def get_ohlc(self) -> List[float]:
         return [self.open, self.high, self.low,  self.close]    
-    def set_ohlc(self, ohlc_ary):
+    def set_ohlc(self, ohlc_ary: Sequence[float]) -> None:
         self.open=ohlc_ary[0]
         self.high=ohlc_ary[1]
         self.low=ohlc_ary[2]
@@ -47,7 +56,7 @@ class Candle:
     """
     Draw the candle on a tkinter canvas
     """
-    def draw_candle(self, tk_canvas):
+    def draw_candle(self, tk_canvas: tk.Canvas) -> None:
         self.draw_high_low(tk_canvas)
         self.draw_open_close(tk_canvas, True)
         pass
@@ -55,14 +64,14 @@ class Candle:
     """
     Draw the high and low as a line
     """
-    def draw_high_low(self, tk_canvas):
+    def draw_high_low(self, tk_canvas: tk.Canvas) -> None:
         tk_canvas.create_line(self.date, self.render_high, self.date, self.render_low, fill=self.color, width=3, tags=self.tags)
         pass
 
     """
     Draw open and close as a line 
     """
-    def draw_open_close(self, tk_canvas, candle=False):
+    def draw_open_close(self, tk_canvas: tk.Canvas, candle: bool = False) -> None:
         if candle:
             tk_canvas.create_rectangle(self.date - self.candle_width, self.render_open, self.date + self.candle_width, self.render_close, fill=self.color, tags=self.tags)
         else:

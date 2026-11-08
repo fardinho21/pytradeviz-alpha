@@ -1,14 +1,17 @@
+from __future__ import annotations
+
 import csv
 import io
 from pathlib import Path
 import unittest
 from unittest.mock import patch
+from typing import Any, Iterable, List, Sequence, TextIO
 from uuid import uuid4
 
 from paginated_price_data import PaginatedPriceData
 
 
-def csv_text(records):
+def csv_text(records: Iterable[Sequence[str]]) -> str:
     output = io.StringIO(newline="")
     writer = csv.writer(output)
     writer.writerow(["source"])
@@ -17,25 +20,27 @@ def csv_text(records):
     return output.getvalue()
 
 
-def row(date, symbol="asset", prices=("1", "3", "0.5", "2")):
+def row(
+    date: str, symbol: str = "asset", prices: Sequence[str] = ("1", "3", "0.5", "2")
+) -> List[str]:
     return ["0", date + " 00:00:00", symbol, *prices]
 
 
-def dates(page):
+def dates(page: Iterable[Sequence[Any]]) -> List[str]:
     return ["-".join(record[0]) for record in page]
 
 
 class PaginatedPriceDataTests(unittest.TestCase):
-    def make_file(self, text):
+    def make_file(self, text: str) -> Path:
         path = Path("tests") / f".pagination-test-{uuid4().hex}.csv"
         path.write_text(text, encoding="utf-8", newline="")
         self.addCleanup(path.unlink, missing_ok=True)
         return path
 
-    def source_for(self, records):
+    def source_for(self, records: Iterable[Sequence[str]]) -> PaginatedPriceData:
         return PaginatedPriceData(self.make_file(csv_text(records)))
 
-    def test_calendar_boundaries_gaps_and_final_partial_page(self):
+    def test_calendar_boundaries_gaps_and_final_partial_page(self) -> None:
         source = self.source_for([
             row("2025-03-31"), row("2024-10-31"), row("2024-08-01"),
             row("2024-07-31"), row("2024-04-30"), row("2024-01-31"),
@@ -56,7 +61,7 @@ class PaginatedPriceDataTests(unittest.TestCase):
         first[0][-1]["rsi"] = 20
         self.assertEqual(first[1][-1]["rsi"], 0)
 
-    def test_leap_day_anchor_and_exclusive_timestamp_boundaries(self):
+    def test_leap_day_anchor_and_exclusive_timestamp_boundaries(self) -> None:
         source = self.source_for([
             ["0", "2025-05-29 12:30:01", "x", "1", "2", "0", "1"],
             ["0", "2025-05-29 12:30:00", "x", "1", "2", "0", "1"],
@@ -69,7 +74,7 @@ class PaginatedPriceDataTests(unittest.TestCase):
         self.assertEqual(dates(source.load_next()), ["2025-05-29", "2025-05-29"])
         self.assertFalse(source.has_more)
 
-    def test_quoted_fields_and_multiline_records(self):
+    def test_quoted_fields_and_multiline_records(self) -> None:
         source = self.source_for([
             row("2021-01-01", 'quoted, "asset"\nline'),
             row("2020-01-01", "another, asset"),
@@ -77,7 +82,7 @@ class PaginatedPriceDataTests(unittest.TestCase):
         self.assertEqual(dates(source.load_initial()), ["2020-01-01"])
         self.assertEqual(dates(source.load_next()), ["2021-01-01"])
 
-    def test_state_and_empty_data(self):
+    def test_state_and_empty_data(self) -> None:
         with self.assertRaisesRegex(ValueError, "no price records"):
             self.source_for([])
         source = self.source_for([row("2020-01-01")])
@@ -88,7 +93,7 @@ class PaginatedPriceDataTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "already"):
             source.load_initial()
 
-    def test_validation_of_order_dates_headers_and_csv(self):
+    def test_validation_of_order_dates_headers_and_csv(self) -> None:
         for records in (
             [row("2020-01-01"), row("2021-01-01")],
             [row("2020-01-01"), row("2020-01-01")],
@@ -107,7 +112,7 @@ class PaginatedPriceDataTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     PaginatedPriceData(self.make_file(text))
 
-    def test_custom_header_count(self):
+    def test_custom_header_count(self) -> None:
         for count in (0, 1, 3):
             output = io.StringIO(newline="")
             writer = csv.writer(output)
@@ -121,7 +126,7 @@ class PaginatedPriceDataTests(unittest.TestCase):
             with self.subTest(count=count), self.assertRaisesRegex(ValueError, "skip_lines"):
                 PaginatedPriceData("unused.csv", skip_lines=count)
 
-    def test_lazy_ohlc_validation_and_transactional_retry(self):
+    def test_lazy_ohlc_validation_and_transactional_retry(self) -> None:
         for bad_prices in (("bad", "1", "1", "1"), ("nan", "1", "1", "1"), ("1",)):
             with self.subTest(prices=bad_prices):
                 source = self.source_for([row("2022-01-01", prices=bad_prices), row("2020-01-01")])
@@ -131,7 +136,7 @@ class PaginatedPriceDataTests(unittest.TestCase):
                         source.load_next()
                     self.assertTrue(source.has_more)
 
-    def test_initial_failure_does_not_consume_or_start(self):
+    def test_initial_failure_does_not_consume_or_start(self) -> None:
         source = self.source_for([row("2020-01-01", prices=("bad", "1", "1", "1"))])
         for _ in range(2):
             with self.assertRaisesRegex(ValueError, "OHLC"):
@@ -140,7 +145,7 @@ class PaginatedPriceDataTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "initial"):
             source.load_next()
 
-    def test_failed_page_does_not_consume_valid_rows_or_skip_interval(self):
+    def test_failed_page_does_not_consume_valid_rows_or_skip_interval(self) -> None:
         path = self.make_file(csv_text([
             row("2022-01-03", prices=("bad", "3", "0.5", "2")),
             row("2022-01-02"),
@@ -156,7 +161,7 @@ class PaginatedPriceDataTests(unittest.TestCase):
         self.assertEqual(dates(source.load_next()), ["2022-01-02", "2022-01-03"])
         self.assertFalse(source.has_more)
 
-    def test_path_input_and_page_reads(self):
+    def test_path_input_and_page_reads(self) -> None:
         path = self.make_file(csv_text([row("2022-01-01"), row("2020-01-01")]))
         import builtins
         with patch("builtins.open", wraps=builtins.open) as opened:
@@ -168,7 +173,7 @@ class PaginatedPriceDataTests(unittest.TestCase):
             self.assertEqual(source.load_next(), [])
             self.assertEqual(opened.call_count, 3)
 
-    def test_read_failure_mid_page_is_retryable(self):
+    def test_read_failure_mid_page_is_retryable(self) -> None:
         path = self.make_file(csv_text([
             row("2022-01-03"), row("2022-01-02"), row("2020-01-01"),
         ]))
@@ -176,20 +181,20 @@ class PaginatedPriceDataTests(unittest.TestCase):
         source.load_initial()
 
         class FailingRead:
-            def __init__(self):
-                self.file = path.open(encoding="utf-8-sig", newline="")
+            def __init__(self) -> None:
+                self.file: TextIO = path.open(encoding="utf-8-sig", newline="")
                 self.reads = 0
 
-            def __enter__(self):
+            def __enter__(self) -> FailingRead:
                 return self
 
-            def __exit__(self, *args):
+            def __exit__(self, *args: object) -> None:
                 self.file.close()
 
-            def seek(self, offset):
+            def seek(self, offset: int) -> int:
                 return self.file.seek(offset)
 
-            def readline(self):
+            def readline(self) -> str:
                 self.reads += 1
                 if self.reads == 2:
                     raise OSError("read failed")
@@ -201,7 +206,7 @@ class PaginatedPriceDataTests(unittest.TestCase):
         self.assertTrue(source.has_more)
         self.assertEqual(dates(source.load_next()), ["2022-01-02", "2022-01-03"])
 
-    def test_changed_timestamp_and_truncated_file_are_retryable(self):
+    def test_changed_timestamp_and_truncated_file_are_retryable(self) -> None:
         original = csv_text([row("2022-01-01"), row("2020-01-01")])
         path = self.make_file(original)
         source = PaginatedPriceData(path)
@@ -216,12 +221,12 @@ class PaginatedPriceDataTests(unittest.TestCase):
         path.write_text(original, newline="")
         self.assertEqual(dates(source.load_next()), ["2022-01-01"])
 
-    def test_datetime_max_boundary(self):
+    def test_datetime_max_boundary(self) -> None:
         source = self.source_for([row("9999-12-31"), row("9999-01-31")])
         self.assertEqual(dates(source.load_initial()), ["9999-01-31", "9999-12-31"])
         self.assertFalse(source.has_more)
 
-    def test_real_sample_is_complete_and_chronological(self):
+    def test_real_sample_is_complete_and_chronological(self) -> None:
         path = Path(__file__).resolve().parents[1] / "data" / "data.csv"
         with path.open(newline="") as file:
             reader = csv.reader(file)

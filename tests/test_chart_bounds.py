@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import contextlib
 import csv
 import io
@@ -8,6 +10,7 @@ import tkinter as tk
 import unittest
 from tkinter import ttk
 from types import SimpleNamespace
+from typing import Any
 
 from candle import Candle
 from indicators import Indicators
@@ -15,15 +18,15 @@ from pytradeviz import PyTradeViz
 
 
 class DrawingCanvas:
-    def __init__(self):
+    def __init__(self) -> None:
         self.lines = []
 
-    def create_line(self, *coordinates, **options):
+    def create_line(self, *coordinates: float, **options: Any) -> None:
         self.lines.append(coordinates)
 
 
 class ChartBoundsTests(unittest.TestCase):
-    def test_price_range_includes_positive_and_negative_extremes(self):
+    def test_price_range_includes_positive_and_negative_extremes(self) -> None:
         viz = PyTradeViz.__new__(PyTradeViz)
         viz.price_data = [[None, 0, 3, -2, 1, {}]]
         viz.calculate_price_range()
@@ -37,7 +40,7 @@ class ChartBoundsTests(unittest.TestCase):
         self.assertGreater(candle.render_high, 0)
         self.assertLess(candle.render_low, viz.chart_grid_space_y)
 
-    def test_first_and_last_candles_have_horizontal_margin(self):
+    def test_first_and_last_candles_have_horizontal_margin(self) -> None:
         viz = PyTradeViz.__new__(PyTradeViz)
         data = {"price_data": [None] * 100}
         viz.calculate_grid_space_x(data)
@@ -46,7 +49,7 @@ class ChartBoundsTests(unittest.TestCase):
         self.assertGreater(first - Candle.candle_width, 0)
         self.assertLess(last + Candle.candle_width, viz.chart_grid_space_x)
 
-    def test_indicator_uses_same_horizontal_offset(self):
+    def test_indicator_uses_same_horizontal_offset(self) -> None:
         data = [[None, 0, 0, 0, 0, {"rsi": 50}]]
         canvas = DrawingCanvas()
         Indicators(price_data=data).render_RSI(canvas, 30, 30)
@@ -58,7 +61,7 @@ class ChartBoundsTests(unittest.TestCase):
     "A graphical display is required for Tk integration tests",
 )
 class TkChartBoundsTests(unittest.TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         path = Path(__file__).resolve().parents[1] / "data" / "data.csv"
         with path.open(newline="") as file:
             rows = list(csv.reader(file))[2:]
@@ -73,7 +76,7 @@ class TkChartBoundsTests(unittest.TestCase):
         self.addCleanup(self.viz.window.destroy)
         self.viz.window.update()
 
-    def test_sample_data_candles_and_date_labels_are_reachable(self):
+    def test_sample_data_candles_and_date_labels_are_reachable(self) -> None:
         canvas = self.viz.canvas
         rectangles = [
             item for item in canvas.find_all()

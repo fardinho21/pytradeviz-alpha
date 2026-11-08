@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import os
 import sys
 import tkinter as tk
 import unittest
 from tkinter import ttk
 from types import SimpleNamespace
+from typing import Optional
 
 from pytradeviz import PyTradeViz
 
@@ -13,7 +16,7 @@ from pytradeviz import PyTradeViz
     "A graphical display is required for Tk integration tests",
 )
 class CandleHeightScaleTests(unittest.TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         data = [
             [["2022", "01", "01"], 0.7, 0.9, 0.6,
              0.8 if i % 2 else 0.65, {"rsi": 0}]
@@ -23,7 +26,7 @@ class CandleHeightScaleTests(unittest.TestCase):
         self.addCleanup(self.viz.window.destroy)
         self.viz.window.update()
 
-    def wheel(self, delta, widget=None):
+    def wheel(self, delta: int, widget: Optional[tk.Misc] = None) -> None:
         canvas = self.viz.canvas
         result = self.viz.scale_candle_height(SimpleNamespace(
             widget=widget or canvas, y=250, delta=delta, num=None
@@ -31,7 +34,7 @@ class CandleHeightScaleTests(unittest.TestCase):
         self.viz.window.update()
         self.assertEqual(result, "break")
 
-    def test_scale_clamps_and_returns_to_original_geometry(self):
+    def test_scale_clamps_and_returns_to_original_geometry(self) -> None:
         viz = self.viz
         canvas = viz.canvas
         candle = next(
@@ -78,7 +81,7 @@ class CandleHeightScaleTests(unittest.TestCase):
         )
         self.assertLess(canvas.canvasy(0), viz.chart_grid_space_y)
 
-    def test_shift_wheel_bindings_and_pointer_anchor(self):
+    def test_shift_wheel_bindings_and_pointer_anchor(self) -> None:
         viz = self.viz
         canvas = viz.canvas
         canvas.yview_moveto(0.25)
@@ -97,7 +100,7 @@ class CandleHeightScaleTests(unittest.TestCase):
             viz.window.update()
         self.assertAlmostEqual(viz.candle_height_scale, 1.21)
 
-    def test_independent_of_ctrl_zoom_and_window_resize(self):
+    def test_independent_of_ctrl_zoom_and_window_resize(self) -> None:
         viz = self.viz
         self.wheel(120)
         viz.zoom_chart(SimpleNamespace(

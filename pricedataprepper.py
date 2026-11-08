@@ -1,20 +1,23 @@
+from __future__ import annotations
+
 import csv 
 import datetime as datetime
 from math import inf
+from typing import Any, Dict, List, Optional, TextIO
 class PriceDataPrepper:
 
-    file_handle=None
-    asset_pair=""
-    highest_price=0
-    lowest_price=inf
-    price_data=[]
-    number_of_candles=0
+    file_handle: Optional[TextIO] = None
+    asset_pair: str = ""
+    highest_price: float = 0
+    lowest_price: float = inf
+    price_data: List[List[Any]] = []
+    number_of_candles: int = 0
 
     """
     :param <string> file_path: absolute or relative path to csv file
     :param <int> skip_lines: number of header lines to skip
     """
-    def __init__(self, file_path, debug=False, reverse=False, skip_lines=2):
+    def __init__(self, file_path: str, debug: bool = False, reverse: bool = False, skip_lines: int = 2) -> None:
 
         self.read_csv_file(file_path,skip_lines)
         
@@ -26,7 +29,7 @@ class PriceDataPrepper:
         if reverse:
             self.price_data.reverse()
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         
         for e in self.price_data:
             print(e)
@@ -35,7 +38,7 @@ class PriceDataPrepper:
         return ""
 
     """"""
-    def read_csv_file(self, file_path,  skip_lines=2):
+    def read_csv_file(self, file_path: str, skip_lines: int = 2) -> None:
 
         self.file_handle = open(file_path)
         self.csvreader = csv.reader(self.file_handle)
@@ -57,13 +60,13 @@ class PriceDataPrepper:
             if l < self.lowest_price:
                 self.lowest_price = l
 
-            dohlc=[date_parsed, o, h, l, c, dict(indi)]
+            dohlc: List[Any] = [date_parsed, o, h, l, c, dict(indi)]
             self.price_data.append(dohlc)
 
     """
     :return <dict> price_data_object: the a dictionary containing the prices, highest price, lowest price and the asset pair
     """
-    def get_price_data_object(self):
+    def get_price_data_object(self) -> Dict[str, Any]:
         price_data_object = dict()
         price_data_object["asset_pair"] = self.asset_pair
         price_data_object["price_data"] = self.price_data

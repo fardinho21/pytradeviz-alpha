@@ -1,40 +1,82 @@
+from __future__ import annotations
+
 import tkinter as tk
 from tkinter import messagebox, ttk
 import csv
+from types import ModuleType
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 from candle import Candle
 import datetime as datetime
 import math
 from indicators import Indicators
 
+
+class PriceDataSource(Protocol):
+    @property
+    def has_more(self) -> bool: ...
+
+    def load_next(self) -> List[List[Any]]: ...
+
+
 class PyTradeViz:
 
-    window_geo="1020x750"
-    window_min_width=1020
-    window_min_height=750
+    window_geo: str = "1020x750"
+    window_min_width: int = 1020
+    window_min_height: int = 750
 
-    canvas_width=900
-    canvas_height=500
-    canvas_color_bg="white"
-    price_limit=3000
-    price_data= None
-    price_data_object=None
-    chart_grid_space_x = 15000 
+    canvas_width: int = 900
+    canvas_height: int = 500
+    canvas_color_bg: str = "white"
+    price_limit: int = 3000
+    price_data: Optional[List[List[Any]]] = None
+    price_data_object: Optional[Dict[str, Any]] = None
+    chart_grid_space_x: float = 15000 
     #TODO: calculate the chart_grid_space_y inside the init function
     #the value will be equal to the highest p
-    chart_grid_space_y = 1000
-    base_chart_height = 1000
-    chart_grid_divider_v = 30
-    chart_grid_divider_h = 20 #20px/price_level
-    chart_padding_x = 60
-    chart_layout_info = {}
-    incrementer=0
-    min_zoom_level = 0.5
-    max_zoom_level = 4.0
-    zoom_step = 1.1
-    min_candle_height_scale = 1.0
-    max_candle_height_scale = 2.5
+    chart_grid_space_y: float = 1000
+    base_chart_height: int = 1000
+    chart_grid_divider_v: int = 30
+    chart_grid_divider_h: int = 20 #20px/price_level
+    chart_padding_x: int = 60
+    chart_layout_info: Dict[str, Any] = {}
+    incrementer: float = 0
+    min_zoom_level: float = 0.5
+    max_zoom_level: float = 4.0
+    zoom_step: float = 1.1
+    min_candle_height_scale: float = 1.0
+    max_candle_height_scale: float = 2.5
 
-    def __init__(self, tk, ttk, price_data_object=None, data_source=None):
+    window: tk.Tk
+    canvas: tk.Canvas
+    canvas_price: tk.Canvas
+    canvas_date: tk.Canvas
+    canvas_indicators: tk.Canvas
+    frame_canvas: ttk.Frame
+    frame_canvas_indicators: ttk.Frame
+    frame_canvas_price: ttk.Frame
+    frame_canvas_date: ttk.Frame
+    scrollbar_horizontal: ttk.Scrollbar
+    scrollbar_vertical: ttk.Scrollbar
+    load_more_button: ttk.Button
+    data_source: Optional[PriceDataSource]
+    indicators_object: Indicators
+    zoom_level: float
+    candle_height_scale: float
+    _scale_x: float
+    _scale_y: float
+    _base_chart_width: float
+    _last_canvas_width: int
+    _last_canvas_height: int
+    price_upper: float
+    price_lower: float
+    _data_lowest: float
+    _data_highest: float
+
+    def __init__(
+        self, tk: ModuleType, ttk: ModuleType,
+        price_data_object: Optional[Dict[str, Any]] = None,
+        data_source: Optional[PriceDataSource] = None,
+    ) -> None:
 
         self.price_data_object=price_data_object
         self.price_data=price_data_object["price_data"]
@@ -88,7 +130,7 @@ class PyTradeViz:
 
         #set price data for indicators_objec 
 
-    def initialize_window(self, tk):
+    def initialize_window(self, tk: ModuleType) -> None:
         self.window = tk.Tk()
         self.window.configure(bg="black")
         self.window.title("PyTradeViz - Alpha")
@@ -96,7 +138,7 @@ class PyTradeViz:
         self.window.minsize(self.window_min_width, self.window_min_height)
         self.window.resizable(True, True)
 
-    def initialize_charts(self, price_data=None):
+    def initialize_charts(self, price_data: Optional[List[List[Any]]] = None) -> None:
 
         for i in range(0, self.chart_grid_space_x, self.chart_grid_divider_v):
             #render vertical lines
@@ -135,13 +177,13 @@ class PyTradeViz:
             tags=("indicator_level",)
         )
         
-    def initialize_canvases(self, tk):
+    def initialize_canvases(self, tk: ModuleType) -> None:
         self.canvas= tk.Canvas(self.frame_canvas, width=self.canvas_width, height=self.canvas_height)
         self.canvas_price= tk.Canvas(self.frame_canvas_price, width=100, height=500)
         self.canvas_date = tk.Canvas(self.frame_canvas_date, width=self.canvas_width, height=50)
         self.canvas_indicators= tk.Canvas(self.frame_canvas_indicators, width=self.canvas_width, height=100)
 
-    def initialize_scrollbars(self, ttk, tk):
+    def initialize_scrollbars(self, ttk: ModuleType, tk: ModuleType) -> None:
         self.scrollbar_horizontal = ttk.Scrollbar(
             self.window, orient=tk.HORIZONTAL, command=self.scroll_xview
         )
@@ -149,18 +191,18 @@ class PyTradeViz:
             self.window, orient=tk.VERTICAL, command=self.scroll_yview
         )
         self.load_more_button = ttk.Button(
-            self.window, text="+3 months →", command=self.load_more_data
+            self.window, text=">", command=self.load_more_data
         )
         if self.data_source is None or not self.data_source.has_more:
             self.load_more_button.state(["disabled"])
 
-    def initialize_frames(self, ttk):
+    def initialize_frames(self, ttk: ModuleType) -> None:
         self.frame_canvas = ttk.Frame(self.window, width=self.canvas_width, height=self.canvas_height)
         self.frame_canvas_indicators = ttk.Frame(self.window, width=self.canvas_width, height=100)
         self.frame_canvas_price = ttk.Frame(self.window, width=100, height=500)
         self.frame_canvas_date = ttk.Frame(self.window, width=self.canvas_width, height=50)
 
-    def configure_all_canvas(self):
+    def configure_all_canvas(self) -> None:
         self.canvas.configure(background=self.canvas_color_bg)
         self.canvas_price.configure(background=self.canvas_color_bg)
         self.canvas_date.configure(background=self.canvas_color_bg)
@@ -176,7 +218,7 @@ class PyTradeViz:
             scrollregion=(0, 0, self.chart_grid_space_x, 100)
         )
 
-    def update_scroll_regions(self):
+    def update_scroll_regions(self) -> None:
         self.canvas.configure(
             scrollregion=(
                 0, 0, self.chart_grid_space_x, self.chart_grid_space_y
@@ -192,7 +234,7 @@ class PyTradeViz:
             scrollregion=(0, 0, self.chart_grid_space_x, 100)
         )
 
-    def configure_grid_layout(self):
+    def configure_grid_layout(self) -> None:
         self.window.grid_columnconfigure(0, weight=1)
         self.window.grid_rowconfigure(0, weight=1)
         self.frame_canvas.grid_columnconfigure(0, weight=1)
@@ -214,7 +256,7 @@ class PyTradeViz:
         self.canvas_date.grid(row=0, column=0, sticky="ew")
         self.canvas_indicators.grid(row=0, column=0, sticky="ew")
 
-    def render_candles(self, start=0, tags=()):
+    def render_candles(self, start: int = 0, tags: Tuple[str, ...] = ()) -> None:
         price_per_pixel = (self.price_upper - self.price_lower) / self.base_chart_height
         for i in range(start, len(self.price_data)):
             pd=self.price_data[i]
@@ -226,14 +268,14 @@ class PyTradeViz:
             )
             c.draw_candle(self.canvas)
 
-    def render_indicators(self, start=0, tags=()):
+    def render_indicators(self, start: int = 0, tags: Tuple[str, ...] = ()) -> None:
         self.indicators_object.render_RSI(
             self.canvas_indicators, self.chart_grid_divider_v, self.chart_padding_x,
             start=start, tags=("rsi",) + tags
         )
         pass
 
-    def calculate_grid_space_x(self, price_data_object):
+    def calculate_grid_space_x(self, price_data_object: Dict[str, Any]) -> None:
         num_of_candles = len(price_data_object["price_data"])
         rendered_width = (
             max(0, num_of_candles - 1) * self.chart_grid_divider_v
@@ -241,7 +283,7 @@ class PyTradeViz:
         )
         self.chart_grid_space_x = max(self.canvas_width, rendered_width)
 
-    def calculate_price_range(self, new_rows=None):
+    def calculate_price_range(self, new_rows: Optional[List[List[Any]]] = None) -> None:
         rows = self.price_data if new_rows is None else new_rows
         prices = [price for row in rows for price in row[1:5]]
         lowest = min(prices)
@@ -255,10 +297,10 @@ class PyTradeViz:
         self.price_upper = max(1.60, highest + margin)
         self.price_lower = min(0, lowest - margin)
 
-    def calculate_(self):
+    def calculate_(self) -> None:
         pass
 
-    def render_dates(self, start=0, tags=()):
+    def render_dates(self, start: int = 0, tags: Tuple[str, ...] = ()) -> None:
         y = self.price_data[start - 1][0][0] if start else ""
         m = self.price_data[start - 1][0][1] if start else ""
         for i in range(start, len(self.price_data)):
@@ -279,10 +321,10 @@ class PyTradeViz:
                 self.canvas_date.create_text(self.chart_padding_x + i*self.chart_grid_divider_v, 30, text=str(id), tags=tags)
         pass
 
-    def get_window(self):
+    def get_window(self) -> tk.Tk:
         return self.window
 
-    def load_more_data(self):
+    def load_more_data(self) -> None:
         if self.data_source is None or not self.data_source.has_more:
             return
 
@@ -367,26 +409,26 @@ class PyTradeViz:
         if not self.data_source.has_more:
             self.load_more_button.state(["disabled"])
         
-    def get_canvas(self):
+    def get_canvas(self) -> tk.Canvas:
         return self.canvas
         pass
 
-    def scroll_xview(self, *args):
+    def scroll_xview(self, *args: str) -> None:
         self.canvas.xview(*args)
 
-    def scroll_yview(self, *args):
+    def scroll_yview(self, *args: str) -> None:
         self.canvas.yview(*args)
 
-    def sync_horizontal_scroll(self, first, last):
+    def sync_horizontal_scroll(self, first: float, last: float) -> None:
         self.scrollbar_horizontal.set(first, last)
         self.canvas_date.xview_moveto(first)
         self.canvas_indicators.xview_moveto(first)
 
-    def sync_vertical_scroll(self, first, last):
+    def sync_vertical_scroll(self, first: float, last: float) -> None:
         self.scrollbar_vertical.set(first, last)
         self.canvas_price.yview_moveto(first)
 
-    def scroll_start(self, event):
+    def scroll_start(self, event: tk.Event) -> None:
         if event.widget is self.canvas:
             self.canvas.scan_mark(event.x, event.y)
         elif event.widget is self.canvas_price:
@@ -394,7 +436,7 @@ class PyTradeViz:
         else:
             self.canvas.scan_mark(event.x, 0)
 
-    def scroll_move(self, event):
+    def scroll_move(self, event: tk.Event) -> None:
         if event.widget is self.canvas:
             self.canvas.scan_dragto(event.x, event.y, gain=1)
         elif event.widget is self.canvas_price:
@@ -402,7 +444,7 @@ class PyTradeViz:
         else:
             self.canvas.scan_dragto(event.x, 0, gain=1)
 
-    def event_bindings(self):
+    def event_bindings(self) -> None:
         self.canvas.bind("<ButtonPress-1>", self.scroll_start)
         self.canvas.bind("<B1-Motion>", self.scroll_move)
         self.canvas.bind("<Configure>", self.resize_chart)
@@ -431,7 +473,7 @@ class PyTradeViz:
             canvas.bind("<Shift-Button-4>", self.scale_candle_height)
             canvas.bind("<Shift-Button-5>", self.scale_candle_height)
 
-    def resize_chart(self, event):
+    def resize_chart(self, event: tk.Event) -> None:
         width = event.width
         height = event.height
         if width <= 1 or height <= 1:
@@ -462,14 +504,14 @@ class PyTradeViz:
         self.canvas.xview_moveto(horizontal_position)
         self.canvas.yview_moveto(vertical_position)
 
-    def wheel_scale_factor(self, event):
+    def wheel_scale_factor(self, event: tk.Event) -> Optional[float]:
         if hasattr(event, "delta") and event.delta:
             return self.zoom_step if event.delta > 0 else 1 / self.zoom_step
         if hasattr(event, "num") and event.num in (4, 5):
             return self.zoom_step if event.num == 4 else 1 / self.zoom_step
         return None
 
-    def scale_candle_height(self, event):
+    def scale_candle_height(self, event: tk.Event) -> str:
         factor = self.wheel_scale_factor(event)
         if factor is None:
             return "break"
@@ -501,7 +543,7 @@ class PyTradeViz:
         self.canvas.yview_moveto(max(0, new_top / self.chart_grid_space_y))
         return "break"
 
-    def zoom_chart(self, event):
+    def zoom_chart(self, event: tk.Event) -> str:
         zoom_factor = self.wheel_scale_factor(event)
         if zoom_factor is None:
             return "break"

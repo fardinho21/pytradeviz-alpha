@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import calendar
 import csv
 import datetime
@@ -12,7 +14,7 @@ from paginated_price_data import PaginatedPriceData
 from pytradeviz import PyTradeViz
 
 
-def add_months(date, months):
+def add_months(date: datetime.date, months: int) -> datetime.date:
     month = date.year * 12 + date.month - 1 + months
     year, month = divmod(month, 12)
     month += 1
@@ -24,7 +26,7 @@ def add_months(date, months):
     "A graphical display is required for Tk integration tests",
 )
 class PaginationIntegrationTests(unittest.TestCase):
-    def test_sample_file_initial_year_and_three_month_pages(self):
+    def test_sample_file_initial_year_and_three_month_pages(self) -> None:
         path = Path(__file__).resolve().parents[1] / "data" / "data.csv"
         with path.open(newline="") as file:
             dates = [

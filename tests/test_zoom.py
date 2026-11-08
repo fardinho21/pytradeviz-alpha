@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import contextlib
 import io
 import os
@@ -6,12 +8,13 @@ import tkinter as tk
 import unittest
 from tkinter import ttk
 from types import SimpleNamespace
+from typing import Optional, Tuple
 
 from pytradeviz import PyTradeViz
 
 
 class CanvasStub:
-    def __init__(self, width, height, region):
+    def __init__(self, width: int, height: int, region: Tuple[float, float, float, float]) -> None:
         self.width = width
         self.height = height
         self.region = region
@@ -19,49 +22,51 @@ class CanvasStub:
         self.top = 0
         self.points = [(0.0, 0.0), (float(region[2]), float(region[3]))]
 
-    def winfo_width(self):
+    def winfo_width(self) -> int:
         return self.width
 
-    def winfo_height(self):
+    def winfo_height(self) -> int:
         return self.height
 
-    def canvasx(self, x):
+    def canvasx(self, x: float) -> float:
         return self.left + x
 
-    def canvasy(self, y):
+    def canvasy(self, y: float) -> float:
         return self.top + y
 
-    def xview(self):
+    def xview(self) -> Tuple[float, int]:
         return (self.left / self.region[2], 0)
 
-    def yview(self):
+    def yview(self) -> Tuple[float, int]:
         return (self.top / self.region[3], 0)
 
-    def xview_moveto(self, fraction):
+    def xview_moveto(self, fraction: float) -> None:
         self.left = max(0, min(
             fraction * self.region[2], self.region[2] - self.width
         ))
 
-    def yview_moveto(self, fraction):
+    def yview_moveto(self, fraction: float) -> None:
         self.top = max(0, min(
             fraction * self.region[3], self.region[3] - self.height
         ))
 
-    def scale(self, tag, origin_x, origin_y, factor_x, factor_y):
+    def scale(
+        self, tag: str, origin_x: float, origin_y: float, factor_x: float, factor_y: float
+    ) -> None:
         self.points = [
             (origin_x + (x - origin_x) * factor_x,
              origin_y + (y - origin_y) * factor_y)
             for x, y in self.points
         ]
 
-    def configure(self, *, scrollregion):
+    def configure(self, *, scrollregion: Tuple[float, float, float, float]) -> None:
         self.region = scrollregion
         self.xview_moveto(self.left / self.region[2])
         self.yview_moveto(self.top / self.region[3])
 
 
 class ZoomTests(unittest.TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         self.viz = PyTradeViz.__new__(PyTradeViz)
         self.viz.zoom_level = 1.0
         self.viz._scale_x = 1.0
@@ -73,12 +78,15 @@ class ZoomTests(unittest.TestCase):
         self.viz.canvas_date = CanvasStub(900, 50, (0, 0, 2000, 50))
         self.viz.canvas_indicators = CanvasStub(900, 100, (0, 0, 2000, 100))
 
-    def zoom(self, delta, widget=None, x=400, y=250, num=None):
+    def zoom(
+        self, delta: int, widget: Optional[object] = None,
+        x: int = 400, y: int = 250, num: Optional[int] = None,
+    ) -> str:
         return self.viz.zoom_chart(SimpleNamespace(
             widget=widget or self.viz.canvas, delta=delta, num=num, x=x, y=y
         ))
 
-    def assert_boundaries_match(self):
+    def assert_boundaries_match(self) -> None:
         chart = self.viz.canvas
         self.assertAlmostEqual(chart.points[0][0], 0)
         self.assertAlmostEqual(chart.points[0][1], 0)
@@ -88,7 +96,7 @@ class ZoomTests(unittest.TestCase):
         self.assertAlmostEqual(self.viz.canvas_date.points[1][0], chart.points[1][0])
         self.assertAlmostEqual(self.viz.canvas_indicators.points[1][0], chart.points[1][0])
 
-    def test_zoom_back_out_at_bottom_right_preserves_boundaries(self):
+    def test_zoom_back_out_at_bottom_right_preserves_boundaries(self) -> None:
         for _ in range(25):
             self.zoom(120)
         self.assertEqual(self.viz.zoom_level, self.viz.max_zoom_level)
@@ -105,7 +113,7 @@ class ZoomTests(unittest.TestCase):
             self.viz.canvas.top, max(0, self.viz.chart_grid_space_y - 500)
         )
 
-    def test_zoom_keeps_pointer_position_away_from_edges(self):
+    def test_zoom_keeps_pointer_position_away_from_edges(self) -> None:
         self.viz.canvas.xview_moveto(0.25)
         self.viz.canvas.yview_moveto(0.25)
         chart_x = self.viz.canvas.canvasx(400)
@@ -115,7 +123,7 @@ class ZoomTests(unittest.TestCase):
         self.assertAlmostEqual(self.viz.canvas.canvasy(250), chart_y * 1.1)
         self.assert_boundaries_match()
 
-    def test_linux_wheel_and_zoom_on_each_axis(self):
+    def test_linux_wheel_and_zoom_on_each_axis(self) -> None:
         for widget in (
             self.viz.canvas, self.viz.canvas_price,
             self.viz.canvas_date, self.viz.canvas_indicators,
@@ -132,7 +140,7 @@ class ZoomTests(unittest.TestCase):
     "A graphical display is required for Tk integration tests",
 )
 class TkZoomTests(unittest.TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         price_data = [
             [["2022", "01", "01"], 0.7, 0.9, 0.6,
              0.8 if i % 2 else 0.65, {"rsi": 0}]
@@ -144,7 +152,7 @@ class TkZoomTests(unittest.TestCase):
         self.viz.window.geometry("1600x1000")
         self.viz.window.update()
 
-    def zoom(self, delta):
+    def zoom(self, delta: int) -> None:
         canvas = self.viz.canvas
         self.viz.zoom_chart(SimpleNamespace(
             widget=canvas, x=canvas.winfo_width() // 2,
@@ -152,7 +160,7 @@ class TkZoomTests(unittest.TestCase):
         ))
         self.viz.window.update()
 
-    def test_zoom_out_after_scrolling_to_bottom(self):
+    def test_zoom_out_after_scrolling_to_bottom(self) -> None:
         canvas = self.viz.canvas
         first_grid_line = canvas.find_all()[0]
         for _ in range(25):
@@ -177,7 +185,7 @@ class TkZoomTests(unittest.TestCase):
             canvas.canvasy(0), self.viz.canvas_price.canvasy(0), delta=2
         )
 
-    def test_ctrl_wheel_binding_and_resize_after_zoom(self):
+    def test_ctrl_wheel_binding_and_resize_after_zoom(self) -> None:
         canvas = self.viz.canvas
         canvas.xview_moveto(0.25)
         canvas.yview_moveto(0.25)

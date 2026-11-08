@@ -15,14 +15,18 @@ cursor. Input paths may be strings or pathlib.Path objects. An empty data
 section raises ValueError.
 """
 
+from __future__ import annotations
+
 import calendar
 import csv
+import os
 from bisect import bisect_left
 from datetime import datetime
 from math import isfinite
+from typing import Any, List, Optional, Tuple, Union
 
 
-def _add_months(anchor, months):
+def _add_months(anchor: datetime, months: int) -> Optional[datetime]:
     """Return an anchored calendar boundary, or None beyond datetime's range."""
     year, month = divmod(anchor.year * 12 + anchor.month - 1 + months, 12)
     if year > datetime.max.year:
@@ -32,7 +36,7 @@ def _add_months(anchor, months):
     return anchor.replace(year=year, month=month, day=day)
 
 
-def _parse_date(row, line):
+def _parse_date(row: List[str], line: int) -> datetime:
     if len(row) < 2:
         raise ValueError(f"CSV record ending on line {line}: missing date")
     try:
@@ -56,11 +60,13 @@ class PaginatedPriceData:
     when their page is loaded; filesystem errors propagate unchanged.
     """
 
-    def __init__(self, file_path, skip_lines=2):
+    def __init__(
+        self, file_path: Union[str, os.PathLike], skip_lines: int = 2
+    ) -> None:
         if isinstance(skip_lines, bool) or not isinstance(skip_lines, int) or skip_lines < 0:
             raise ValueError("skip_lines must be a non-negative integer")
         self._file_path = file_path
-        records = []
+        records: List[Tuple[datetime, int, int]] = []
         with open(file_path, encoding="utf-8-sig", newline="") as file:
             reader = csv.reader(iter(file.readline, ""), strict=True)
             try:
@@ -69,7 +75,7 @@ class PaginatedPriceData:
                         raise ValueError(
                             f"CSV must contain {skip_lines} header records to skip"
                         )
-                previous = None
+                previous: Optional[datetime] = None
                 while True:
                     offset = file.tell()
                     row = next(reader, None)
@@ -95,13 +101,15 @@ class PaginatedPriceData:
         self._started = False
 
     @property
-    def has_more(self):
+    def has_more(self) -> bool:
         """Whether any records remain, including before the initial load."""
         return self._cursor < len(self._records)
 
-    def _load_until(self, boundary, interval):
+    def _load_until(
+        self, boundary: Optional[datetime], interval: int
+    ) -> List[List[Any]]:
         end = len(self._records) if boundary is None else bisect_left(self._dates, boundary)
-        page = []
+        page: List[List[Any]] = []
         with open(self._file_path, encoding="utf-8-sig", newline="") as file:
             for date, offset, line in self._records[self._cursor:end]:
                 file.seek(offset)
@@ -131,7 +139,7 @@ class PaginatedPriceData:
         self._interval = interval
         return page
 
-    def load_initial(self):
+    def load_initial(self) -> List[List[Any]]:
         """Load the oldest year's records; calling this more than once is an error."""
         if self._started:
             raise RuntimeError("Initial page has already been loaded")
@@ -139,7 +147,7 @@ class PaginatedPriceData:
         self._started = True
         return page
 
-    def load_next(self):
+    def load_next(self) -> List[List[Any]]:
         """Load the next nonempty three-month window, or [] when exhausted."""
         if not self._started:
             raise RuntimeError("Load the initial page first")

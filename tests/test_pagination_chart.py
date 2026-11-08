@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import contextlib
 import copy
 import datetime
@@ -8,13 +10,16 @@ import tkinter as tk
 import unittest
 from tkinter import ttk
 from types import SimpleNamespace
+from typing import Any, List
 from unittest.mock import patch
 
 from pytradeviz import PyTradeViz
 from indicators import Indicators
 
 
-def make_rows(start, count, high=1.0, low=0.5):
+def make_rows(
+    start: datetime.date, count: int, high: float = 1.0, low: float = 0.5
+) -> List[List[Any]]:
     rows = []
     for i in range(count):
         date = start + datetime.timedelta(days=i)
@@ -28,19 +33,19 @@ def make_rows(start, count, high=1.0, low=0.5):
 
 
 class Source:
-    def __init__(self, pages):
+    def __init__(self, pages: List[List[List[Any]]]) -> None:
         self.pages = pages
 
     @property
-    def has_more(self):
+    def has_more(self) -> bool:
         return bool(self.pages)
 
-    def load_next(self):
+    def load_next(self) -> List[List[Any]]:
         return self.pages.pop(0)
 
 
 class IncrementalIndicatorTests(unittest.TestCase):
-    def test_incremental_rsi_matches_full_calculation(self):
+    def test_incremental_rsi_matches_full_calculation(self) -> None:
         complete = make_rows(datetime.date(2020, 1, 1), 37)
         expected = copy.deepcopy(complete)
         Indicators(price_data=expected).calculate_RSI_full()
@@ -55,7 +60,7 @@ class IncrementalIndicatorTests(unittest.TestCase):
             [row[5]["rsi"] for row in expected],
         )
 
-    def test_rsi_handles_short_and_only_rising_data(self):
+    def test_rsi_handles_short_and_only_rising_data(self) -> None:
         data = make_rows(datetime.date(2020, 1, 1), 3)
         indicator = Indicators(price_data=data)
         indicator.calculate_RSI_incremental()
@@ -73,7 +78,7 @@ class IncrementalIndicatorTests(unittest.TestCase):
     "A graphical display is required for Tk integration tests",
 )
 class PaginationChartTests(unittest.TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         initial = make_rows(datetime.date(2020, 1, 1), 365)
         page = make_rows(datetime.date(2020, 12, 31), 90, high=3.0, low=-0.5)
         self.source = Source([page])
@@ -85,7 +90,7 @@ class PaginationChartTests(unittest.TestCase):
         self.viz.window.geometry("1400x900")
         self.viz.window.update()
 
-    def test_append_after_zoom_preserves_chart_and_extends_bounds(self):
+    def test_append_after_zoom_preserves_chart_and_extends_bounds(self) -> None:
         viz = self.viz
         canvas = viz.canvas
         viz.zoom_chart(SimpleNamespace(widget=canvas, x=300, y=250, delta=120, num=None))
@@ -140,13 +145,13 @@ class PaginationChartTests(unittest.TestCase):
         self.assertTrue(grid)
         self.assertAlmostEqual(canvas.coords(grid[0])[2], viz.chart_grid_space_x)
 
-    def test_button_is_disabled_when_source_is_exhausted(self):
+    def test_button_is_disabled_when_source_is_exhausted(self) -> None:
         self.viz.load_more_button.invoke()
         size = len(self.viz.price_data)
         self.viz.load_more_button.invoke()
         self.assertEqual(len(self.viz.price_data), size)
 
-    def test_load_error_is_visible_and_keeps_existing_chart(self):
+    def test_load_error_is_visible_and_keeps_existing_chart(self) -> None:
         size = len(self.viz.price_data)
         with patch.object(self.source, "load_next", side_effect=OSError("read failed")):
             with patch("pytradeviz.messagebox.showerror") as showerror:
@@ -156,7 +161,7 @@ class PaginationChartTests(unittest.TestCase):
         self.assertEqual(len(self.viz.price_data), size)
         self.assertFalse(self.viz.load_more_button.instate(["disabled"]))
 
-    def test_calendar_labels_continue_across_page_boundary(self):
+    def test_calendar_labels_continue_across_page_boundary(self) -> None:
         self.viz.load_more_button.invoke()
         dates = self.viz.canvas_date
         x = (
@@ -170,7 +175,7 @@ class PaginationChartTests(unittest.TestCase):
         self.assertEqual(len(year_labels), 1)
         self.assertAlmostEqual(dates.coords(year_labels[0])[0], x)
 
-    def test_multiple_pages_preserve_existing_canvas_items(self):
+    def test_multiple_pages_preserve_existing_canvas_items(self) -> None:
         extra = make_rows(datetime.date(2021, 3, 31), 10, high=4.0)
         self.source.pages.append(extra)
         self.viz.load_more_button.invoke()
@@ -185,7 +190,7 @@ class PaginationChartTests(unittest.TestCase):
         self.assertGreater(self.viz.price_upper, 4)
         self.assertTrue(self.viz.load_more_button.instate(["disabled"]))
 
-    def test_resize_and_zoom_after_loading_keep_new_candles_reachable(self):
+    def test_resize_and_zoom_after_loading_keep_new_candles_reachable(self) -> None:
         viz = self.viz
         viz.load_more_button.invoke()
         viz.window.update()
@@ -207,7 +212,7 @@ class PaginationChartTests(unittest.TestCase):
             viz.canvas.canvasx(0), viz.canvas_date.canvasx(0), delta=3
         )
 
-    def test_load_page_after_candle_height_scaling(self):
+    def test_load_page_after_candle_height_scaling(self) -> None:
         viz = self.viz
         canvas = viz.canvas
         for _ in range(5):
@@ -236,7 +241,7 @@ class PaginationChartTests(unittest.TestCase):
             canvas.canvasy(0), viz.canvas_price.canvasy(0), delta=2
         )
 
-    def test_short_initial_data_renders_first_rsi_when_page_arrives(self):
+    def test_short_initial_data_renders_first_rsi_when_page_arrives(self) -> None:
         initial = make_rows(datetime.date(2020, 1, 1), 3)
         next_rows = make_rows(datetime.date(2020, 1, 4), 8)
         viz = PyTradeViz(
