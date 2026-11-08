@@ -1,1 +1,31 @@
-./__pycache__/*
+# Python bytecode and tool caches
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Temporary CSV files written by the pagination tests
+tests/.pagination-test-*.csv
+
+# Packaging and build output
+build/
+dist/
+*.egg-info/
+
+# Local virtual environments (the committed lib/, bin/, share/ tree is intentionally not ignored)
+.venv/
+venv/
+
+# Local secrets and settings
+.env
+.github
+ghp_*
+# Editor and OS files
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
