@@ -158,6 +158,7 @@ class PyTradeViz:
 
         #event bind scrolling to mouse dragging
         self.event_bindings()
+        self.center_vertical_view()
 
         #set price data for indicators_objec 
 
@@ -402,6 +403,9 @@ class PyTradeViz:
 
     def toggle_selection_mode(self) -> None:
         self.selection_mode = not self.selection_mode
+        self._box_origin = None
+        if self.selected_indices or self._selection_box is not None:
+            self.set_selection(set(), None)
         if self.selection_mode:
             self.select_mode_label.place(
                 relx=1.0, x=-8, y=self.select_label_y, anchor="ne"
@@ -411,9 +415,6 @@ class PyTradeViz:
         else:
             self.select_mode_label.place_forget()
             self.select_button.state(["!pressed"])
-            self._box_origin = None
-            if self.selected_indices or self._selection_box is not None:
-                self.set_selection(set(), None)
 
     def toggle_dark_mode(self) -> None:
         self.dark_mode = not self.dark_mode
@@ -495,8 +496,7 @@ class PyTradeViz:
 
         self.render_candles(old_count, tags=("new_page",))
         self.render_dates(old_count, tags=("new_page",))
-        indicator_start = old_count if old_count >= 7 else 6
-        self.render_indicators(indicator_start, tags=("new_page",))
+        self.render_indicators(old_count, tags=("new_page",))
         for canvas, sx, sy in (
             (self.canvas, self._scale_x, self._scale_y),
             (self.canvas_date, self._scale_x, 1),
@@ -530,6 +530,11 @@ class PyTradeViz:
 
     def scroll_yview(self, *args: str) -> None:
         self.canvas.yview(*args)
+
+    def center_vertical_view(self) -> None:
+        self.window.update_idletasks()
+        visible = self.canvas.winfo_height() / self.chart_grid_space_y
+        self.canvas.yview_moveto(max(0.0, 0.5 - visible / 2))
 
     def sync_horizontal_scroll(self, first: float, last: float) -> None:
         self.scrollbar_horizontal.set(first, last)
@@ -613,6 +618,7 @@ class PyTradeViz:
         index = self.candle_index_at(
             self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
         )
+        self.set_selection({index} if index is not None else set(), None)
         if index is not None:
             self.show_candle_info(index)
 
@@ -730,10 +736,12 @@ class PyTradeViz:
     def style_candle_item(self, item: int, index: int) -> None:
         _, open_, _, _, close = self.price_data[index][:5]
         color = Candle.color_for(open_, close)
-        if index in self.selected_indices:
+        selected = index in self.selected_indices
+        if selected:
             color = self.highlight_color(color)
         if self.canvas.type(item) == "rectangle":
-            Candle.style_body(self.canvas, item, self.dark_mode, color)
+            # Selected bodies are always solid so the highlight fills them in dark mode too.
+            Candle.style_body(self.canvas, item, self.dark_mode and not selected, color)
         else:
             self.canvas.itemconfigure(item, fill=color)
 

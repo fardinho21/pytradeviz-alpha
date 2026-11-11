@@ -12,6 +12,7 @@ from tkinter import ttk
 from types import SimpleNamespace
 from typing import Tuple
 
+from candle import Candle
 from pytradeviz import PyTradeViz
 
 
@@ -27,7 +28,7 @@ class CandleInfoTests(unittest.TestCase):
         rows.reverse()
         self.price_data = [
             [row[1].split(" ")[0].split("-"), *(float(v) for v in row[3:7]),
-             {"rsi": 0}]
+             {"rsi": None}]
             for row in rows
         ]
         with contextlib.redirect_stdout(io.StringIO()):
@@ -52,6 +53,42 @@ class CandleInfoTests(unittest.TestCase):
         event = self.event_at(x, y)
         self.viz.scroll_start(event)
         self.viz.select_candle(event)
+
+    def body_color(self, index: int) -> str:
+        item = next(i for i in self.viz.canvas.find_withtag(f"candle_{index}")
+                    if self.viz.canvas.type(i) == "rectangle")
+        return self.viz.canvas.itemcget(item, "fill")
+
+    def test_clicked_candle_is_highlighted(self) -> None:
+        plain = self.body_color(10)
+        self.click(*self.candle_center(10))
+        self.assertEqual(self.viz.selected_indices, {10})
+        self.assertEqual(self.body_color(10), self.viz.highlight_color(plain))
+
+    def test_clicking_another_candle_unhighlights_previous(self) -> None:
+        plain_first = self.body_color(10)
+        plain_second = self.body_color(200)
+        self.click(*self.candle_center(10))
+        self.click(*self.candle_center(200))
+        self.assertEqual(self.viz.selected_indices, {200})
+        self.assertEqual(self.body_color(10), plain_first)
+        self.assertEqual(self.body_color(200), self.viz.highlight_color(plain_second))
+
+    def test_clicked_candle_is_highlighted_in_dark_mode(self) -> None:
+        self.viz.toggle_dark_mode()
+        _, open_, _, _, close = self.price_data[10][:5]
+        base = Candle.color_for(open_, close)
+        self.click(*self.candle_center(10))
+        self.assertEqual(self.body_color(10), self.viz.highlight_color(base))
+
+    def test_click_on_empty_space_unhighlights_and_hides_ohlc(self) -> None:
+        plain = self.body_color(10)
+        x, y = self.candle_center(10)
+        self.click(x, y)
+        self.click(x + 15, y)
+        self.assertEqual(self.viz.selected_indices, set())
+        self.assertEqual(self.body_color(10), plain)
+        self.assertEqual(self.viz.candle_info_label.place_info(), {})
 
     def test_clicking_candle_shows_its_date_and_ohlc(self) -> None:
         for index in (10, 200):

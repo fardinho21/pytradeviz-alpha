@@ -57,9 +57,9 @@ class PaginatedPriceDataTests(unittest.TestCase):
         self.assertFalse(source.has_more)
         self.assertEqual(source.load_next(), [])
         self.assertEqual(first[0], [["2023", "01", "31"], 1.0, 3.0, 0.5, 2.0,
-                                    {"rsi": 0, "ema": 0, "sma": 0}])
+                                    {"rsi": None, "ema": None, "sma": None}])
         first[0][-1]["rsi"] = 20
-        self.assertEqual(first[1][-1]["rsi"], 0)
+        self.assertIsNone(first[1][-1]["rsi"])
 
     def test_leap_day_anchor_and_exclusive_timestamp_boundaries(self) -> None:
         source = self.source_for([

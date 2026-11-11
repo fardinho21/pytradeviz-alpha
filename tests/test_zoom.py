@@ -143,7 +143,7 @@ class TkZoomTests(unittest.TestCase):
     def setUp(self) -> None:
         price_data = [
             [["2022", "01", "01"], 0.7, 0.9, 0.6,
-             0.8 if i % 2 else 0.65, {"rsi": 0}]
+             0.8 if i % 2 else 0.65, {"rsi": None}]
             for i in range(60)
         ]
         with contextlib.redirect_stdout(io.StringIO()):

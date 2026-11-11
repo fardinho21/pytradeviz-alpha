@@ -35,7 +35,7 @@ def load_price_rows() -> List[List[Any]]:
         rows = list(csv.reader(file))[2:]
     rows.reverse()
     return [
-        [row[1].split(" ")[0].split("-"), *(float(v) for v in row[3:7]), {"rsi": 0}]
+        [row[1].split(" ")[0].split("-"), *(float(v) for v in row[3:7]), {"rsi": None}]
         for row in rows
     ]
 

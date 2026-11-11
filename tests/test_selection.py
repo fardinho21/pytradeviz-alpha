@@ -22,7 +22,7 @@ def load_price_rows() -> List[List[Any]]:
         rows = list(csv.reader(file))[2:]
     rows.reverse()
     return [
-        [row[1].split(" ")[0].split("-"), *(float(v) for v in row[3:7]), {"rsi": 0}]
+        [row[1].split(" ")[0].split("-"), *(float(v) for v in row[3:7]), {"rsi": None}]
         for row in rows
     ]
 
@@ -79,8 +79,7 @@ class SelectionTests(unittest.TestCase):
     def body_color(self, index: int) -> str:
         item = next(i for i in self.viz.canvas.find_withtag(f"candle_{index}")
                     if self.viz.canvas.type(i) == "rectangle")
-        key = "outline" if self.viz.dark_mode else "fill"
-        return self.viz.canvas.itemcget(item, key)
+        return self.viz.canvas.itemcget(item, "fill")
 
     def selection_items(self) -> List[int]:
         return list(self.viz.canvas.find_withtag("selection"))
@@ -187,10 +186,10 @@ class SelectionTests(unittest.TestCase):
 
     def test_selected_candles_are_highlighted_in_dark_mode(self) -> None:
         self.viz.toggle_dark_mode()
-        plain = self.body_color(11)
+        base = Candle.color_for(self.price_data[11][1], self.price_data[11][4])
         self.select_range(10, 12)
-        self.assertEqual(self.body_color(11), self.viz.highlight_color(plain))
-        self.assertNotEqual(self.body_color(11), plain)
+        self.assertEqual(self.body_color(11), self.viz.highlight_color(base))
+        self.assertNotEqual(self.body_color(11), self.viz.get_theme()["canvas"])
 
     def test_toggling_selection_mode_off_clears_selection(self) -> None:
         plain = self.body_color(12)
@@ -200,6 +199,15 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(self.viz.candle_info_label.place_info(), {})
         self.assertEqual(self.selection_items(), [])
         self.assertEqual(self.body_color(12), plain)
+
+    def test_entering_selection_mode_clears_single_candle_selection(self) -> None:
+        plain = self.body_color(10)
+        self.click(*self.candle_center(10))
+        self.assertEqual(self.viz.selected_indices, {10})
+        self.viz.toggle_selection_mode()
+        self.assertEqual(self.viz.selected_indices, set())
+        self.assertEqual(self.body_color(10), plain)
+        self.assertEqual(self.viz.candle_info_label.place_info(), {})
 
     def test_selection_survives_theme_toggle(self) -> None:
         self.select_range(10, 12)

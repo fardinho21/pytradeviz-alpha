@@ -28,7 +28,7 @@ class Indicators:
                    tags: Tuple[str, ...] = (), fill: str = "black") -> None:
         previous = None
         for i in range(start - 1, -1, -1):
-            if self.price_data[i][5]["rsi"]:
+            if self.price_data[i][5]["rsi"] is not None:
                 previous = (offset_x + divider_v * i, self.price_data[i][5]["rsi"])
                 break
         
@@ -36,7 +36,7 @@ class Indicators:
             row = self.price_data[i]
             pos = offset_x + divider_v*i
             
-            if row[5]["rsi"]:
+            if row[5]["rsi"] is not None:
                 rsi = row[5]["rsi"]
 
                 if previous is None:
@@ -54,8 +54,11 @@ class Indicators:
         pass
 
     def calculate_RSI(self, avg_gain: float, avg_loss: float) -> float:
+        # With no gains or losses the ratio is undefined; 50 is the neutral value.
+        if avg_gain == 0 and avg_loss == 0:
+            return 50
         if avg_loss == 0:
-            return 100 if avg_gain > 0 else 0
+            return 100
         return 100 - (100/ (1 + (avg_gain/avg_loss)))
 
     def calculate_RSI_full(self, period: int = 7) -> None:
@@ -63,70 +66,55 @@ class Indicators:
         self.calculate_RSI_incremental(period)
 
     def calculate_RSI_incremental(self, period: int = 7) -> None:
-        if len(self.price_data) < period:
+        """Compute Wilder's RSI for rows that do not have a value yet.
+
+        Each bar's gain or loss is its close-to-close change. The first RSI is
+        the simple average of the first ``period`` changes and is stored at
+        index ``period``. Later bars smooth both averages with
+        ``(previous * (period - 1) + current) / period``.
+        """
+        if len(self.price_data) <= period:
             return
         if self._rsi_state is None:
-            gainloss = self.RSI_step_one(period)
+            avg_gain, avg_loss = self.RSI_step_one(period)
             self._rsi_state = {
-                "period": period, "next_index": period,
-                "prev_gain": gainloss[0], "prev_loss": gainloss[1],
-                "running_gain": 0, "running_loss": 0,
-                "gain_updated": False, "loss_updated": False,
+                "period": period, "next_index": period + 1,
+                "avg_gain": avg_gain, "avg_loss": avg_loss,
             }
         state = self._rsi_state
         if state["period"] != period:
             raise ValueError("RSI period cannot change during incremental calculation")
 
         for i in range(state["next_index"], len(self.price_data)):
-            rsi: float = 0
-
-            data_row = self.price_data[i]
-            open = data_row[1]
-            close = data_row[4]
-
-            if open < close:
-                state["gain_updated"] = True
-                state["running_gain"] = (state["prev_gain"] * (period - 1) + close - open) / period
-                state["prev_gain"] = state["running_gain"]
-
-            elif open > close:
-                state["loss_updated"] = True
-                state["running_loss"] = (state["prev_loss"] * (period - 1) + open - close) / period
-                state["prev_loss"] = state["running_loss"]
-
-            if state["gain_updated"] and state["loss_updated"]:
-                state["gain_updated"] = False
-                state["loss_updated"] = False
-
-                rsi = self.calculate_RSI(state["running_gain"], state["running_loss"])
-                self.price_data[i][5]["rsi"] = rsi
+            gain, loss = self._close_change_gain_loss(i)
+            state["avg_gain"] = (state["avg_gain"] * (period - 1) + gain) / period
+            state["avg_loss"] = (state["avg_loss"] * (period - 1) + loss) / period
+            self.price_data[i][5]["rsi"] = self.calculate_RSI(
+                state["avg_gain"], state["avg_loss"]
+            )
         state["next_index"] = len(self.price_data)
 
-    def RSI_step_one(self, period: int) -> List[float]:
+    def _close_change_gain_loss(self, index: int) -> Tuple[float, float]:
+        change = self.price_data[index][4] - self.price_data[index - 1][4]
+        return max(change, 0.0), max(-change, 0.0)
 
-        avg_gain_one: float = 0
-        avg_loss_one: float = 0
+    def RSI_step_one(self, period: int) -> Tuple[float, float]:
+        """Seed the Wilder averages from the first ``period`` changes.
 
-        #find avg gain and loss
-        for i in range(period):
-            
-            data_row = self.price_data[i]
-            open = data_row[1]
-            close = data_row[4]
+        Stores the first RSI at index ``period`` and returns the average gain
+        and average loss used to seed the smoothing.
+        """
+        gain_sum = 0.0
+        loss_sum = 0.0
+        for i in range(1, period + 1):
+            gain, loss = self._close_change_gain_loss(i)
+            gain_sum += gain
+            loss_sum += loss
 
-            if open < close:
-                avg_gain_one += close - open
-            elif open > close:
-                avg_loss_one += open - close
-
-        avg_gain_one = avg_gain_one/period
-        avg_loss_one = avg_loss_one/period
-
-        rsi = self.calculate_RSI(avg_gain_one, avg_loss_one)
-
-        self.price_data[period - 1][5]["rsi"] = rsi
-
-        return [avg_gain_one, avg_loss_one, rsi]
+        avg_gain = gain_sum / period
+        avg_loss = loss_sum / period
+        self.price_data[period][5]["rsi"] = self.calculate_RSI(avg_gain, avg_loss)
+        return avg_gain, avg_loss
 
     def calculate_SMA(self, period: int = 7) -> None:
         pass

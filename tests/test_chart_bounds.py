@@ -55,6 +55,15 @@ class ChartBoundsTests(unittest.TestCase):
         Indicators(price_data=data).render_RSI(canvas, 30, 30)
         self.assertEqual(canvas.lines, [(30, 100, 30, 50)])
 
+    def test_zero_rsi_is_drawn_and_missing_rsi_is_not(self) -> None:
+        data = [
+            [None, 0, 0, 0, 0, {"rsi": None}],
+            [None, 0, 0, 0, 0, {"rsi": 0}],
+        ]
+        canvas = DrawingCanvas()
+        Indicators(price_data=data).render_RSI(canvas, 30, 30)
+        self.assertEqual(canvas.lines, [(30, 100, 60, 100)])
+
 
 @unittest.skipUnless(
     os.environ.get("DISPLAY") or sys.platform in ("win32", "darwin"),
@@ -68,7 +77,7 @@ class TkChartBoundsTests(unittest.TestCase):
         rows.reverse()
         self.price_data = [
             [row[1].split(" ")[0].split("-"), *(float(v) for v in row[3:7]),
-             {"rsi": 0}]
+             {"rsi": None}]
             for row in rows
         ]
         with contextlib.redirect_stdout(io.StringIO()):

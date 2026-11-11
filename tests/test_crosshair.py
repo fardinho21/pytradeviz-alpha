@@ -21,7 +21,7 @@ def load_price_rows() -> List[List[Any]]:
         rows = list(csv.reader(file))[2:]
     rows.reverse()
     return [
-        [row[1].split(" ")[0].split("-"), *(float(v) for v in row[3:7]), {"rsi": 0}]
+        [row[1].split(" ")[0].split("-"), *(float(v) for v in row[3:7]), {"rsi": None}]
         for row in rows
     ]
 
@@ -104,11 +104,20 @@ class CrosshairTests(unittest.TestCase):
         )
 
     def test_price_label_matches_axis_tick(self) -> None:
-        tick = self.viz.canvas_price.find_withtag("price_label")[3]
-        tick_text = self.viz.canvas_price.itemcget(tick, "text")
-        tick_y = self.viz.canvas_price.coords(tick)[1]
-        self.move_to(self.viz.canvas_price, 50, int(tick_y))
-        self.assertIn(tick_text, self.crosshair_text(self.viz.canvas_price))
+        price_canvas = self.viz.canvas_price
+        top = price_canvas.canvasy(0)
+        visible = [
+            tick for tick in price_canvas.find_withtag("price_label")
+            if 0 <= price_canvas.coords(tick)[1] - top <= price_canvas.winfo_height()
+        ]
+        self.assertTrue(visible, "expected at least one price tick in view")
+        tick = visible[0]
+        tick_text = price_canvas.itemcget(tick, "text")
+        widget_y = price_canvas.coords(tick)[1] - top
+        self.move_to(price_canvas, 50, round(widget_y))
+        shown = self.crosshair_text(price_canvas)
+        self.assertEqual(len(shown), 1)
+        self.assertAlmostEqual(float(shown[0]), float(tick_text), delta=0.01)
 
     def test_price_label_sits_at_right_end_of_horizontal_line(self) -> None:
         self.move_to(self.viz.canvas, 200, 200)

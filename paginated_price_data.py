@@ -133,7 +133,7 @@ class PaginatedPriceData:
                 page.append([
                     [f"{date.year:04d}", f"{date.month:02d}", f"{date.day:02d}"],
                     *prices,
-                    {"rsi": 0, "ema": 0, "sma": 0},
+                    {"rsi": None, "ema": None, "sma": None},
                 ])
         self._cursor = end
         self._interval = interval

@@ -27,7 +27,19 @@ def make_rows(
         closing = 0.8 if i % 2 else 0.6
         rows.append([
             [str(date.year), f"{date.month:02}", f"{date.day:02}"],
-            opening, high, low, closing, {"rsi": 0, "ema": 0, "sma": 0}
+            opening, high, low, closing, {"rsi": None, "ema": None, "sma": None}
+        ])
+    return rows
+
+
+def make_closes(closes: List[float], offset: int = 0) -> List[List[Any]]:
+    start = datetime.date(2020, 1, 1)
+    rows = []
+    for i, close in enumerate(closes, start=offset):
+        date = start + datetime.timedelta(days=i)
+        rows.append([
+            [str(date.year), f"{date.month:02}", f"{date.day:02}"],
+            close, close, close, close, {"rsi": None, "ema": None, "sma": None}
         ])
     return rows
 
@@ -60,17 +72,39 @@ class IncrementalIndicatorTests(unittest.TestCase):
             [row[5]["rsi"] for row in expected],
         )
 
-    def test_rsi_handles_short_and_only_rising_data(self) -> None:
-        data = make_rows(datetime.date(2020, 1, 1), 3)
+    def test_rsi_matches_wilder_known_values(self) -> None:
+        data = make_closes([10, 11, 10, 12, 12])
+        Indicators(price_data=data).calculate_RSI_incremental(period=2)
+        rsi = [row[5]["rsi"] for row in data]
+        self.assertEqual(rsi[:2], [None, None])
+        self.assertAlmostEqual(rsi[2], 50)
+        self.assertAlmostEqual(rsi[3], 250 / 3)
+        self.assertAlmostEqual(rsi[4], 250 / 3)
+
+    def test_rsi_waits_for_period_changes_and_handles_only_rising(self) -> None:
+        closes = [10.0 + i for i in range(10)]
+        data = make_closes(closes[:3])
         indicator = Indicators(price_data=data)
         indicator.calculate_RSI_incremental()
-        for row in data:
-            row[4] = 0.8
-        data.extend(make_rows(datetime.date(2020, 1, 4), 4))
-        for row in data:
-            row[4] = 0.8
+        self.assertEqual([row[5]["rsi"] for row in data], [None] * 3)
+        data.extend(make_closes(closes[3:], offset=3))
         indicator.calculate_RSI_incremental()
-        self.assertEqual(data[6][5]["rsi"], 100)
+        rsi = [row[5]["rsi"] for row in data]
+        self.assertEqual(rsi[:7], [None] * 7)
+        self.assertEqual(rsi[7:], [100] * 3)
+
+    def test_rsi_value_of_zero_when_prices_only_fall(self) -> None:
+        data = make_closes([10, 9, 8])
+        indicator = Indicators(price_data=data)
+        indicator.calculate_RSI_incremental(period=2)
+        self.assertEqual(data[2][5]["rsi"], 0)
+
+    def test_rsi_is_neutral_50_when_prices_are_flat(self) -> None:
+        data = make_closes([10.0] * 9)
+        Indicators(price_data=data).calculate_RSI_incremental()
+        rsi = [row[5]["rsi"] for row in data]
+        self.assertEqual(rsi[:7], [None] * 7)
+        self.assertEqual(rsi[7:], [50] * 2)
 
 
 @unittest.skipUnless(
