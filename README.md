@@ -38,6 +38,27 @@ entry and exit price (open, high, low, close), in the form
 and the exit candle is the one under the release point. Gains are green and losses
 are red. ROI mode and select mode are mutually exclusive, and turning either on
 clears the current selection and ROI result.
+The menu bar has three menus:
+
+- **File**: *Open Data File* and *Close Data File* are placeholders for now.
+  *About* shows the program name, version, and Python version. *Exit* closes the
+  program.
+- **Indicators**: *Moving Averages* → *Simple* opens the simple moving average
+  settings, and *Moving Averages* → *Exponential* opens an empty window for now.
+  *RSI* and *Bollinger* are placeholders.
+- **Strategies**: a placeholder that does nothing yet.
+
+In the Simple window each moving average has its own *Show* checkbox, line
+*Style* (Dotted, Dashed, or Solid), and *Color* (Red, Blue, Orange, Green, or
+Violet). The 3-, 7-, 14-, and 30-candle averages use closing prices and are
+counted in candles (rows of data), not calendar days. Changes apply when
+**Apply** is pressed. Lines are drawn over the candles and follow zooming,
+scrolling, dark mode, and loading more data.
+
+Each average also has a *Show Hi-Low MA* checkbox, which is drawn only while
+*Show* is checked. It adds two averages of the same period, one of the highs
+and one of the lows, drawn as 6-pixel Xs with 1-pixel lines in the average's color.
+
 The window can be resized or maximized.
 
 Run the tests with `python3 -m unittest discover -s tests -v`. Tk integration

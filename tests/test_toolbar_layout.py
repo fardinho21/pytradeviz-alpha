@@ -105,7 +105,7 @@ class ToolbarLayoutTests(unittest.TestCase):
         opened = [w for w in self.viz.window.winfo_children()
                   if isinstance(w, tk.Toplevel) and w not in before]
         self.assertEqual([w.title() for w in opened], ["Simple"])
-        self.assertEqual(opened[0].winfo_children(), [])
+        self.assertTrue(opened[0].winfo_children(), "Simple window should show its controls")
 
 
 if __name__ == "__main__":

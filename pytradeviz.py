@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
 from candle import Candle
 import datetime as datetime
 import math
-from indicators import Indicators
+from indicators import Indicators, SMA_PERIODS, HIGH_COLUMN, LOW_COLUMN
 
 
 class PriceDataSource(Protocol):
@@ -41,6 +41,18 @@ class PyTradeViz:
         "selection": "#e0894f", "highlight": "#f4a261",
         "gain": "#3fb950", "loss": "#ff7b72",
     }
+    # Simple moving average line styles and colors, keyed by the radio button labels.
+    sma_line_styles: Dict[str, Tuple[int, ...]] = {
+        "Dotted": (3, 3), "Dashed": (6, 4), "Solid": (),
+    }
+    sma_line_widths: Dict[str, int] = {
+        "Dotted": 3, "Dashed": 2, "Solid": 2,
+    }
+    sma_colors: Dict[str, str] = {
+        "Red": "#e53935", "Blue": "#1e88e5", "Orange": "#fb8c00",
+        "Green": "#43a047", "Violet": "#8e24aa",
+    }
+    sma_default_colors: Dict[int, str] = {3: "Red", 7: "Blue", 14: "Orange", 30: "Violet"}
     dark_mode: bool = False
     crosshair_root: Optional[Tuple[int, int]] = None
     price_limit: int = 3000
@@ -133,6 +145,13 @@ class PyTradeViz:
         self.indicators_object = Indicators()
         self.indicators_object.set_price_data(self.price_data)
         self.indicators_object.calculate_RSI_incremental()
+        # Applied simple moving average settings, keyed by period.
+        self.sma_applied: Dict[int, Dict[str, Any]] = {
+            period: {"enabled": False, "hi_lo": False, "style": "Solid",
+                     "color": self.sma_default_colors[period]}
+            for period in SMA_PERIODS
+        }
+        self._sma_items: List[int] = []
 
         self.calculate_grid_space_x(price_data_object)
         self._base_chart_width = self.chart_grid_space_x
@@ -243,7 +262,56 @@ class PyTradeViz:
         return indicators_menu
 
     def open_moving_average_window(self, tk: ModuleType, name: str) -> None:
-        self.open_modal_window(tk, name)
+        window = self.open_modal_window(tk, name)
+        if name == "Simple":
+            self.build_simple_moving_average_content(tk, window)
+
+    def build_simple_moving_average_content(self, tk: ModuleType, window: Any) -> None:
+        # Edits are staged in these variables and only applied by the Apply button.
+        staged: Dict[int, Dict[str, Any]] = {}
+        for period in SMA_PERIODS:
+            applied = self.sma_applied[period]
+            staged[period] = {
+                "enabled": tk.BooleanVar(window, value=applied["enabled"]),
+                "hi_lo": tk.BooleanVar(window, value=applied["hi_lo"]),
+                "style": tk.StringVar(window, value=applied["style"]),
+                "color": tk.StringVar(window, value=applied["color"]),
+            }
+
+        for period in SMA_PERIODS:
+            variables = staged[period]
+            group = tk.LabelFrame(window, text=f"{period}-candle SMA", padx=10, pady=6)
+            group.pack(fill="x", padx=12, pady=(12, 0))
+            tk.Checkbutton(group, text="Show", variable=variables["enabled"]).grid(
+                row=0, column=0, sticky="w")
+            tk.Checkbutton(group, text="Show Hi-Low MA", variable=variables["hi_lo"]).grid(
+                row=0, column=1, columnspan=5, sticky="w")
+            tk.Label(group, text="Style:").grid(row=1, column=0, sticky="w")
+            for column, style in enumerate(self.sma_line_styles, start=1):
+                tk.Radiobutton(group, text=style, value=style, variable=variables["style"]).grid(
+                    row=1, column=column, sticky="w")
+            tk.Label(group, text="Color:").grid(row=2, column=0, sticky="w")
+            for column, color in enumerate(self.sma_colors, start=1):
+                tk.Radiobutton(group, text=color, value=color, variable=variables["color"]).grid(
+                    row=2, column=column, sticky="w")
+
+        buttons = tk.Frame(window)
+        buttons.pack(fill="x", padx=12, pady=12)
+        tk.Button(buttons, text="Close", width=8, command=window.destroy).pack(side="right")
+        tk.Button(
+            buttons, text="Apply", width=8,
+            command=lambda: self.apply_simple_moving_averages(staged),
+        ).pack(side="right", padx=(0, 8))
+
+    def apply_simple_moving_averages(self, staged: Dict[int, Dict[str, Any]]) -> None:
+        for period, variables in staged.items():
+            self.sma_applied[period] = {
+                "enabled": variables["enabled"].get(),
+                "hi_lo": variables["hi_lo"].get(),
+                "style": variables["style"].get(),
+                "color": variables["color"].get(),
+            }
+        self.draw_overlays()
 
     def open_modal_window(self, tk: ModuleType, title: str) -> Any:
         # Selecting a menu item already unposts the menus; this opens the modal dialog.
@@ -937,8 +1005,39 @@ class PyTradeViz:
                 right * self._scale_x, self.price_to_y(bottom),
             )
 
+    def candle_x(self, index: int) -> float:
+        return (self.chart_padding_x + index * self.chart_grid_divider_v) * self._scale_x
+
+    def draw_moving_averages(self) -> None:
+        for item in self._sma_items:
+            self.canvas.delete(item)
+        self._sma_items = []
+        for period in SMA_PERIODS:
+            settings = self.sma_applied[period]
+            if not settings["enabled"]:
+                continue
+            self._sma_items.extend(self.indicators_object.render_SMA(
+                self.canvas, period,
+                x_for_index=self.candle_x, y_for_price=self.price_to_y,
+                fill=self.sma_colors[settings["color"]],
+                dash=self.sma_line_styles[settings["style"]],
+                width=self.sma_line_widths[settings["style"]],
+                tags=("sma", f"sma_{period}"),
+            ))
+            if settings["hi_lo"]:
+                # Markers are only created for the visible part of the chart.
+                x_range = (self.canvas.canvasx(0), self.canvas.canvasx(self.canvas.winfo_width()))
+                for column in (HIGH_COLUMN, LOW_COLUMN):
+                    self._sma_items.extend(self.indicators_object.render_SMA_markers(
+                        self.canvas, period, column,
+                        x_for_index=self.candle_x, y_for_price=self.price_to_y,
+                        fill=self.sma_colors[settings["color"]], size=6,
+                        tags=("sma", f"sma_{period}", "sma_hi_lo"), x_range=x_range,
+                    ))
+
     def draw_overlays(self) -> None:
         self.draw_selection_box()
+        self.draw_moving_averages()
         self.draw_crosshair()
 
     def candle_indices_in(self, x1: float, y1: float, x2: float, y2: float) -> Set[int]:

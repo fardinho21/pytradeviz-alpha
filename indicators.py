@@ -2,7 +2,15 @@
 from __future__ import annotations
 
 import tkinter as tk
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+# Simple moving average periods, counted in candles (rows of price data).
+SMA_PERIODS: Tuple[int, ...] = (3, 7, 14, 30)
+
+# Indices of the price fields in each row: [date, open, high, low, close, indicators].
+HIGH_COLUMN = 2
+LOW_COLUMN = 3
+CLOSE_COLUMN = 4
 
 class Indicators:
 
@@ -17,11 +25,13 @@ class Indicators:
     ) -> None:
         self.price_data=price_data
         self._rsi_state = None
+        self._sma_cache: Dict[Tuple[int, int], List[Optional[float]]] = {}
         pass
 
     def set_price_data(self, price_data: List[List[Any]]) -> None:
         self.price_data=price_data
         self._rsi_state = None
+        self._sma_cache = {}
 
     def render_RSI(self, tk_indicators_canvas: tk.Canvas, divider_v: float,
                    offset_x: float = 0, start: int = 0,
@@ -47,8 +57,62 @@ class Indicators:
                 previous = [pos, rsi]
         pass
 
-    def render_SMA(self) -> None:
-        pass
+    def render_SMA(
+        self, tk_canvas: tk.Canvas, period: int,
+        x_for_index: Callable[[int], float], y_for_price: Callable[[float], float],
+        fill: str = "black", dash: Tuple[int, ...] = (), width: int = 2,
+        tags: Tuple[str, ...] = (), column: int = CLOSE_COLUMN,
+    ) -> List[int]:
+        """Draw the SMA for ``period`` as polylines and return the line item ids.
+
+        ``x_for_index`` and ``y_for_price`` map a row index and a price to canvas
+        coordinates. Rows without a value (the warm-up rows) break the line.
+        ``column`` selects the price field that is averaged.
+        """
+        options: Dict[str, Any] = {"fill": fill, "width": width, "tags": tags}
+        if dash:
+            options["dash"] = dash
+        items: List[int] = []
+        run: List[float] = []
+        for i, value in enumerate(self.calculate_SMA(period, column)):
+            if value is None:
+                self._draw_run(tk_canvas, run, options, items)
+                run = []
+                continue
+            run.extend((x_for_index(i), y_for_price(value)))
+        self._draw_run(tk_canvas, run, options, items)
+        return items
+
+    def render_SMA_markers(
+        self, tk_canvas: tk.Canvas, period: int, column: int,
+        x_for_index: Callable[[int], float], y_for_price: Callable[[float], float],
+        fill: str = "black", size: int = 6, tags: Tuple[str, ...] = (),
+        x_range: Optional[Tuple[float, float]] = None,
+    ) -> List[int]:
+        """Draw an X of ``size`` pixels across at each valid point of the SMA.
+
+        Each X is two diagonal one-pixel strokes. Points whose x falls outside
+        ``x_range`` (canvas coordinates) are skipped, so only the visible part
+        of the series creates canvas items. Returns the stroke item ids.
+        """
+        half = size / 2
+        items: List[int] = []
+        for i, value in enumerate(self.calculate_SMA(period, column)):
+            if value is None:
+                continue
+            x, y = x_for_index(i), y_for_price(value)
+            if x_range is not None and not (x_range[0] - half <= x <= x_range[1] + half):
+                continue
+            for x1, y1, x2, y2 in ((x - half, y - half, x + half, y + half),
+                                   (x - half, y + half, x + half, y - half)):
+                items.append(tk_canvas.create_line(x1, y1, x2, y2, fill=fill, width=1, tags=tags))
+        return items
+
+    @staticmethod
+    def _draw_run(tk_canvas: tk.Canvas, run: List[float], options: Dict[str, Any],
+                  items: List[int]) -> None:
+        if len(run) >= 4:
+            items.append(tk_canvas.create_line(*run, **options))
 
     def render_EMA(self) -> None:
         pass
@@ -116,8 +180,25 @@ class Indicators:
         self.price_data[period][5]["rsi"] = self.calculate_RSI(avg_gain, avg_loss)
         return avg_gain, avg_loss
 
-    def calculate_SMA(self, period: int = 7) -> None:
-        pass
+    def calculate_SMA(self, period: int, column: int = CLOSE_COLUMN) -> List[Optional[float]]:
+        """Return the simple moving average of one price field, one entry per row.
+
+        ``column`` is the price field to average (close by default; use
+        ``HIGH_COLUMN`` or ``LOW_COLUMN`` for the high and low moving averages).
+        The average covers the current row and the ``period - 1`` rows before it,
+        so the first ``period - 1`` entries are ``None``. Results are cached per
+        period and field, and only rows added since the last call are computed.
+        """
+        if period < 1:
+            raise ValueError("SMA period must be at least 1")
+        values = self._sma_cache.setdefault((period, column), [])
+        for i in range(len(values), len(self.price_data)):
+            if i < period - 1:
+                values.append(None)
+            else:
+                window = self.price_data[i - period + 1:i + 1]
+                values.append(sum(row[column] for row in window) / period)
+        return values
 
     def calculate_EMA(self, period: int = 7) -> None:
         pass

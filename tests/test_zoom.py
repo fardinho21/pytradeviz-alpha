@@ -10,6 +10,7 @@ from tkinter import ttk
 from types import SimpleNamespace
 from typing import Optional, Tuple
 
+from indicators import SMA_PERIODS
 from pytradeviz import PyTradeViz
 
 
@@ -77,6 +78,8 @@ class ZoomTests(unittest.TestCase):
         self.viz.canvas_price = CanvasStub(100, 500, (0, 0, 100, 1000))
         self.viz.canvas_date = CanvasStub(900, 50, (0, 0, 2000, 50))
         self.viz.canvas_indicators = CanvasStub(900, 100, (0, 0, 2000, 100))
+        self.viz.sma_applied = {period: {"enabled": False} for period in SMA_PERIODS}
+        self.viz._sma_items = []
 
     def zoom(
         self, delta: int, widget: Optional[object] = None,
