@@ -164,6 +164,9 @@ class PyTradeViz:
             for period in SMA_PERIODS
         }
         self._sma_items: List[int] = []
+        # Bollinger Bands settings. The period and width are fixed in the indicator module.
+        self.bollinger_applied: Dict[str, Any] = {"enabled": False, "style": "Solid", "color": "Green"}
+        self._bollinger_items: List[int] = []
 
         self.calculate_grid_space_x(price_data_object)
         self._base_chart_width = self.chart_grid_space_x
@@ -385,6 +388,10 @@ class PyTradeViz:
         }
         for period, field in MOVING_AVERAGE_FIELDS.items():
             record[field] = self.indicators_object.calculate_SMA(period)[index]
+        middle, upper, lower = self.indicators_object.calculate_bollinger()
+        record["bollinger_middle"] = middle[index]
+        record["bollinger_upper"] = upper[index]
+        record["bollinger_lower"] = lower[index]
         return record
 
     def initialize_indicators_menu(self, tk: ModuleType) -> Any:
@@ -396,13 +403,63 @@ class PyTradeViz:
             )
         indicators_menu.add_cascade(label="Moving Averages", menu=moving_averages_menu)
         indicators_menu.add_cascade(label="RSI", menu=tk.Menu(indicators_menu, tearoff=0))
-        indicators_menu.add_cascade(label="Bollinger", menu=tk.Menu(indicators_menu, tearoff=0))
+        bollinger_menu = tk.Menu(indicators_menu, tearoff=0)
+        bollinger_menu.add_command(
+            label="Bollinger Bands", command=lambda: self.open_bollinger_window(tk),
+        )
+        indicators_menu.add_cascade(label="Bollinger", menu=bollinger_menu)
         return indicators_menu
 
     def open_moving_average_window(self, tk: ModuleType, name: str) -> None:
         window = self.open_modal_window(tk, name)
         if name == "Simple":
             self.build_simple_moving_average_content(tk, window)
+
+    def open_bollinger_window(self, tk: ModuleType) -> None:
+        window = self.open_modal_window(tk, "Bollinger Bands")
+        self.build_bollinger_content(tk, window)
+
+    def build_bollinger_content(self, tk: ModuleType, window: Any) -> None:
+        # Edits are staged in these variables and only applied by the Apply button.
+        applied = self.bollinger_applied
+        staged = {
+            "enabled": tk.BooleanVar(window, value=applied["enabled"]),
+            "style": tk.StringVar(window, value=applied["style"]),
+            "color": tk.StringVar(window, value=applied["color"]),
+        }
+        group = tk.LabelFrame(window, text="Bollinger Bands (20 candles, 2 std. dev.)",
+                              padx=10, pady=6)
+        group.pack(fill="x", padx=12, pady=(12, 0))
+        tk.Checkbutton(group, text="Show", variable=staged["enabled"]).grid(
+            row=0, column=0, sticky="w")
+        tk.Label(group, text="Style:").grid(row=1, column=0, sticky="w")
+        for column, style in enumerate(self.sma_line_styles, start=1):
+            tk.Radiobutton(group, text=style, value=style, variable=staged["style"]).grid(
+                row=1, column=column, sticky="w")
+        tk.Label(group, text="Color:").grid(row=2, column=0, sticky="w")
+        for column, color in enumerate(self.sma_colors, start=1):
+            tk.Radiobutton(group, text=color, value=color, variable=staged["color"]).grid(
+                row=2, column=column, sticky="w")
+
+        buttons = tk.Frame(window)
+        buttons.pack(fill="x", padx=12, pady=12)
+        tk.Button(buttons, text="Close", width=8, command=window.destroy).pack(side="right")
+        tk.Button(
+            buttons, text="Apply", width=8,
+            command=lambda: self.apply_bollinger(staged),
+        ).pack(side="right", padx=(0, 8))
+
+    def apply_bollinger(self, staged: Dict[str, Any]) -> None:
+        self.bollinger_applied = {
+            "enabled": staged["enabled"].get(),
+            "style": staged["style"].get(),
+            "color": staged["color"].get(),
+        }
+        # Showing the bands can widen the price scale, so the chart is rescaled to fit.
+        old_upper, old_lower = self.price_upper, self.price_lower
+        self.calculate_price_range()
+        self.rescale_price_scale(old_upper, old_lower)
+        self.draw_overlays()
 
     def build_simple_moving_average_content(self, tk: ModuleType, window: Any) -> None:
         # Edits are staged in these variables and only applied by the Apply button.
@@ -622,9 +679,36 @@ class PyTradeViz:
             highest = max(highest, self._data_highest)
         self._data_lowest = lowest
         self._data_highest = highest
-        margin = max((highest - lowest) * 0.05, abs(highest) * 0.01, 0.01)
-        self.price_upper = max(1.60, highest + margin)
-        self.price_lower = min(0, lowest - margin)
+        # The scale also covers the Bollinger Bands while they are shown.
+        scale_lowest, scale_highest = lowest, highest
+        if self.bollinger_applied["enabled"]:
+            band_range = self.indicators_object.bollinger_range()
+            if band_range is not None:
+                scale_lowest = min(scale_lowest, band_range[0])
+                scale_highest = max(scale_highest, band_range[1])
+        margin = max((scale_highest - scale_lowest) * 0.05, abs(scale_highest) * 0.01, 0.01)
+        self.price_upper = max(1.60, scale_highest + margin)
+        self.price_lower = min(0, scale_lowest - margin)
+
+    def rescale_price_scale(self, old_upper: float, old_lower: float) -> Tuple[float, float]:
+        """Stretch the candles and price labels from the old range to the current one.
+
+        Returns the vertical scale ratio and the pixel shift that were applied.
+        """
+        old_span = old_upper - old_lower
+        new_span = self.price_upper - self.price_lower
+        ratio = old_span / new_span
+        shift = self.chart_grid_space_y * (self.price_upper - old_upper) / new_span
+        if ratio != 1 or shift != 0:
+            self.canvas.scale("candle", 0, 0, 1, ratio)
+            self.canvas.move("candle", 0, shift)
+            labels = self.canvas_price.find_withtag("price_label")
+            for index, item in enumerate(labels):
+                level = self.price_upper - (
+                    index * new_span * self.chart_grid_divider_h / self.base_chart_height
+                )
+                self.canvas_price.itemconfigure(item, text="{:.2f}".format(level))
+        return ratio, shift
 
     def calculate_(self) -> None:
         pass
@@ -812,20 +896,7 @@ class PyTradeViz:
         self.indicators_object.calculate_RSI_incremental()
         self.calculate_price_range(new_rows)
         self.price_upper = max(old_upper, self.price_upper)
-        self.price_lower = min(old_lower, self.price_lower)
-        old_span = old_upper - old_lower
-        new_span = self.price_upper - self.price_lower
-        ratio = old_span / new_span
-        shift = self.chart_grid_space_y * (self.price_upper - old_upper) / new_span
-        if ratio != 1 or shift != 0:
-            self.canvas.scale("candle", 0, 0, 1, ratio)
-            self.canvas.move("candle", 0, shift)
-            labels = self.canvas_price.find_withtag("price_label")
-            for index, item in enumerate(labels):
-                level = self.price_upper - (
-                    index * new_span * self.chart_grid_divider_h / self.base_chart_height
-                )
-                self.canvas_price.itemconfigure(item, text="{:.2f}".format(level))
+        ratio, shift = self.rescale_price_scale(old_upper, old_lower)
 
         self.calculate_grid_space_x(self.price_data_object)
         new_base_width = self.chart_grid_space_x
@@ -1207,9 +1278,28 @@ class PyTradeViz:
                         tags=("sma", f"sma_{period}", "sma_hi_lo"), x_range=x_range,
                     ))
 
+    def draw_bollinger(self) -> None:
+        for item in self._bollinger_items:
+            self.canvas.delete(item)
+        self._bollinger_items = []
+        settings = self.bollinger_applied
+        if not settings["enabled"]:
+            return
+        series = zip(("middle", "upper", "lower"), self.indicators_object.calculate_bollinger())
+        for name, values in series:
+            self._bollinger_items.extend(self.indicators_object.render_series(
+                self.canvas, values,
+                x_for_index=self.candle_x, y_for_price=self.price_to_y,
+                fill=self.sma_colors[settings["color"]],
+                dash=self.sma_line_styles[settings["style"]],
+                width=self.sma_line_widths[settings["style"]],
+                tags=("bollinger", f"bollinger_{name}"),
+            ))
+
     def draw_overlays(self) -> None:
         self.draw_selection_box()
         self.draw_moving_averages()
+        self.draw_bollinger()
         self.draw_crosshair()
 
     def candle_indices_in(self, x1: float, y1: float, x2: float, y2: float) -> Set[int]:

@@ -15,7 +15,10 @@ EXPORT_DIRECTORY = os.path.join(
 )
 
 # Every candle record uses these keys, in this order.
-CANDLE_FIELDS = ("open", "high", "low", "close", "rsi", "3d_sma", "7d_sma", "2wk_sma", "1mo_sma")
+CANDLE_FIELDS = (
+    "open", "high", "low", "close", "rsi", "3d_sma", "7d_sma", "2wk_sma", "1mo_sma",
+    "bollinger_middle", "bollinger_upper", "bollinger_lower",
+)
 # Moving average period (in candles) for each moving average field.
 MOVING_AVERAGE_FIELDS = {3: "3d_sma", 7: "7d_sma", 14: "2wk_sma", 30: "1mo_sma"}
 # XML attribute names cannot start with a digit, so the moving average fields are renamed.

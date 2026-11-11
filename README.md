@@ -43,8 +43,9 @@ clears the current selection and ROI result.
 The button beside the ROI button, labelled `{</>}`, toggles select-and-export mode,
 which shows a "select and export mode" label. It uses the same box-select gesture
 as select mode. After you release the mouse, a prompt asks for a label for the
-selected candles. Each candle stores its open, high, low, close, RSI, and the
-3-, 7-, 14-, and 30-candle simple moving averages. Labeled selections are kept in
+selected candles. Each candle stores its open, high, low, close, RSI, the
+3-, 7-, 14-, and 30-candle simple moving averages, and the Bollinger middle, upper,
+and lower bands. Labeled selections are kept in
 memory until the program closes.
 The menu bar has four menus:
 
@@ -53,7 +54,7 @@ The menu bar has four menus:
   program.
 - **Indicators**: *Moving Averages* → *Simple* opens the simple moving average
   settings, and *Moving Averages* → *Exponential* opens an empty window for now.
-  *RSI* and *Bollinger* are placeholders.
+  *Bollinger* → *Bollinger Bands* opens the Bollinger settings. *RSI* is a placeholder.
 - **Strategies**: a placeholder that does nothing yet.
 - **Data**: lists the labeled selections with their candle counts. *Export to JSON*
   and *Export to XML* write all selections to `data/labeled_data/selections_YYYYmmdd_HHMMSS.json`
@@ -65,7 +66,8 @@ Export files use the layouts in `data/export-format.txt`, with these differences
 the JSON is valid JSON (`{"label": {"label_candle_0": {...}}}`), the XML label is
 stored in a `label` attribute on each group element, and the moving-average
 attributes are named `sma_3d`, `sma_7d`, `sma_2wk`, and `sma_1mo` because XML
-attribute names cannot start with a digit.
+attribute names cannot start with a digit. The Bollinger values are stored as
+`bollinger_middle`, `bollinger_upper`, and `bollinger_lower`.
 
 In the Simple window each moving average has its own *Show* checkbox, line
 *Style* (Dotted, Dashed, or Solid), and *Color* (Red, Blue, Orange, Green, or
@@ -77,6 +79,14 @@ scrolling, dark mode, and loading more data.
 Each average also has a *Show Hi-Low MA* checkbox, which is drawn only while
 *Show* is checked. It adds two averages of the same period, one of the highs
 and one of the lows, drawn as 6-pixel Xs with 1-pixel lines in the average's color.
+
+The Bollinger Bands use a fixed 20-candle window and 2 standard deviations of
+the closing prices. The middle band is the 20-candle average, and the upper and
+lower bands sit 2 standard deviations above and below it. The window has a *Show*
+checkbox, a line *Style* and a *Color* chosen the same way as the averages, and
+**Apply**. The three bands are drawn as lines only, with no shading. While the
+bands are shown, the price scale grows to include them and shrinks back when they
+are hidden.
 
 The window can be resized or maximized.
 

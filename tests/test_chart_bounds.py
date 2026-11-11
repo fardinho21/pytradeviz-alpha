@@ -29,6 +29,7 @@ class ChartBoundsTests(unittest.TestCase):
     def test_price_range_includes_positive_and_negative_extremes(self) -> None:
         viz = PyTradeViz.__new__(PyTradeViz)
         viz.price_data = [[None, 0, 3, -2, 1, {}]]
+        viz.bollinger_applied = {"enabled": False}
         viz.calculate_price_range()
         self.assertGreater(viz.price_upper, 3)
         self.assertLess(viz.price_lower, -2)

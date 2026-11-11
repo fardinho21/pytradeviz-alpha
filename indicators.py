@@ -1,11 +1,16 @@
 
 from __future__ import annotations
 
+import math
 import tkinter as tk
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # Simple moving average periods, counted in candles (rows of price data).
 SMA_PERIODS: Tuple[int, ...] = (3, 7, 14, 30)
+
+# Bollinger Bands use a fixed window (in candles) and width (in standard deviations).
+BOLLINGER_PERIOD = 20
+BOLLINGER_MULTIPLIER = 2
 
 # Indices of the price fields in each row: [date, open, high, low, close, indicators].
 HIGH_COLUMN = 2
@@ -26,12 +31,15 @@ class Indicators:
         self.price_data=price_data
         self._rsi_state = None
         self._sma_cache: Dict[Tuple[int, int], List[Optional[float]]] = {}
+        self._bollinger_cache: Dict[Tuple[int, float, int], Tuple[
+            List[Optional[float]], List[Optional[float]], List[Optional[float]]]] = {}
         pass
 
     def set_price_data(self, price_data: List[List[Any]]) -> None:
         self.price_data=price_data
         self._rsi_state = None
         self._sma_cache = {}
+        self._bollinger_cache = {}
 
     def render_RSI(self, tk_indicators_canvas: tk.Canvas, divider_v: float,
                    offset_x: float = 0, start: int = 0,
@@ -65,16 +73,31 @@ class Indicators:
     ) -> List[int]:
         """Draw the SMA for ``period`` as polylines and return the line item ids.
 
-        ``x_for_index`` and ``y_for_price`` map a row index and a price to canvas
-        coordinates. Rows without a value (the warm-up rows) break the line.
         ``column`` selects the price field that is averaged.
+        """
+        return self.render_series(
+            tk_canvas, self.calculate_SMA(period, column),
+            x_for_index=x_for_index, y_for_price=y_for_price,
+            fill=fill, dash=dash, width=width, tags=tags,
+        )
+
+    def render_series(
+        self, tk_canvas: tk.Canvas, values: List[Optional[float]],
+        x_for_index: Callable[[int], float], y_for_price: Callable[[float], float],
+        fill: str = "black", dash: Tuple[int, ...] = (), width: int = 2,
+        tags: Tuple[str, ...] = (),
+    ) -> List[int]:
+        """Draw one value per row as polylines and return the line item ids.
+
+        ``x_for_index`` and ``y_for_price`` map a row index and a price to canvas
+        coordinates. ``None`` entries (the warm-up rows) break the line.
         """
         options: Dict[str, Any] = {"fill": fill, "width": width, "tags": tags}
         if dash:
             options["dash"] = dash
         items: List[int] = []
         run: List[float] = []
-        for i, value in enumerate(self.calculate_SMA(period, column)):
+        for i, value in enumerate(values):
             if value is None:
                 self._draw_run(tk_canvas, run, options, items)
                 run = []
@@ -199,6 +222,46 @@ class Indicators:
                 window = self.price_data[i - period + 1:i + 1]
                 values.append(sum(row[column] for row in window) / period)
         return values
+
+    def calculate_bollinger(
+        self, period: int = BOLLINGER_PERIOD, multiplier: float = BOLLINGER_MULTIPLIER,
+        column: int = CLOSE_COLUMN,
+    ) -> Tuple[List[Optional[float]], List[Optional[float]], List[Optional[float]]]:
+        """Return the (middle, upper, lower) Bollinger Bands, one entry per row.
+
+        The middle band is the simple moving average of ``column``. The upper and
+        lower bands sit ``multiplier`` population standard deviations above and
+        below it, using the same window. Warm-up rows are ``None``. Results are
+        cached and only rows added since the last call are computed.
+        """
+        if period < 1:
+            raise ValueError("Bollinger period must be at least 1")
+        averages = self.calculate_SMA(period, column)
+        middle, upper, lower = self._bollinger_cache.setdefault(
+            (period, multiplier, column), ([], [], []))
+        for i in range(len(middle), len(self.price_data)):
+            average = averages[i]
+            if average is None:
+                middle.append(None)
+                upper.append(None)
+                lower.append(None)
+                continue
+            window = [row[column] for row in self.price_data[i - period + 1:i + 1]]
+            deviation = math.sqrt(sum((price - average) ** 2 for price in window) / period)
+            middle.append(average)
+            upper.append(average + multiplier * deviation)
+            lower.append(average - multiplier * deviation)
+        return middle, upper, lower
+
+    def bollinger_range(
+        self, period: int = BOLLINGER_PERIOD, multiplier: float = BOLLINGER_MULTIPLIER,
+    ) -> Optional[Tuple[float, float]]:
+        """Return the (lowest, highest) band value over all rows, or None if there are none."""
+        _, upper, lower = self.calculate_bollinger(period, multiplier)
+        values = [value for value in upper + lower if value is not None]
+        if not values:
+            return None
+        return min(values), max(values)
 
     def calculate_EMA(self, period: int = 7) -> None:
         pass

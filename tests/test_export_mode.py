@@ -83,7 +83,10 @@ class ExportModeTests(unittest.TestCase):
         self.viz.save_labeled_selection("breakout", {2, 3})
         records = self.viz.labeled_selections["breakout"]
         self.assertEqual(len(records), 2)
-        expected_keys = {"open", "high", "low", "close", "rsi", "3d_sma", "7d_sma", "2wk_sma", "1mo_sma"}
+        expected_keys = {
+            "open", "high", "low", "close", "rsi", "3d_sma", "7d_sma", "2wk_sma", "1mo_sma",
+            "bollinger_middle", "bollinger_upper", "bollinger_lower",
+        }
         self.assertEqual(set(records[0]), expected_keys)
         self.assertEqual(records[0]["open"], self.viz.price_data[2][1])
         self.assertEqual(records[0]["close"], self.viz.price_data[2][4])

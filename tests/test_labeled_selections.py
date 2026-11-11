@@ -23,6 +23,7 @@ def record(open_: float, sma_3d=None) -> dict:
     return {
         "open": open_, "high": open_ + 1, "low": open_ - 1, "close": open_ + 0.5,
         "rsi": 55.0, "3d_sma": sma_3d, "7d_sma": None, "2wk_sma": None, "1mo_sma": None,
+        "bollinger_middle": open_, "bollinger_upper": open_ + 2.0, "bollinger_lower": open_ - 2.0,
     }
 
 

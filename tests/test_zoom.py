@@ -80,6 +80,8 @@ class ZoomTests(unittest.TestCase):
         self.viz.canvas_indicators = CanvasStub(900, 100, (0, 0, 2000, 100))
         self.viz.sma_applied = {period: {"enabled": False} for period in SMA_PERIODS}
         self.viz._sma_items = []
+        self.viz.bollinger_applied = {"enabled": False}
+        self.viz._bollinger_items = []
 
     def zoom(
         self, delta: int, widget: Optional[object] = None,
