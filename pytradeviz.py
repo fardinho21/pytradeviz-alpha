@@ -3,6 +3,8 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import messagebox, ttk
 import csv
+import itertools
+import platform
 from types import ModuleType
 from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
 from candle import Candle
@@ -31,11 +33,13 @@ class PyTradeViz:
         "canvas": "white", "ink": "black", "grid": "black",
         "crosshair": "black", "crosshair_text": "white",
         "selection": "#8c8c8c", "highlight": "#ffffff",
+        "gain": "#1a7f37", "loss": "#cf222e",
     }
     dark_theme: Dict[str, str] = {
         "canvas": "black", "ink": "white", "grid": "#4a4a4a",
         "crosshair": "#f4a261", "crosshair_text": "black",
         "selection": "#e0894f", "highlight": "#f4a261",
+        "gain": "#3fb950", "loss": "#ff7b72",
     }
     dark_mode: bool = False
     crosshair_root: Optional[Tuple[int, int]] = None
@@ -98,6 +102,23 @@ class PyTradeViz:
     select_button: ttk.Button
     select_icon: Any
     select_label_y: int = 0
+    mode_button_frame: ttk.Frame
+    roi_button: ttk.Button
+    roi_mode: bool = False
+    # Column of the last ROI drag as (left x, right x), unscaled like the box.
+    _roi_span: Optional[Tuple[float, float]] = None
+    # Each ROI row pairs an entry price field with an exit price field.
+    # Column indices match the rows in price_data: open, high, low, close.
+    roi_price_fields: Tuple[Tuple[str, str, int], ...] = (
+        ("open", "O", 1), ("high", "H", 2), ("low", "L", 3), ("close", "C", 4),
+    )
+    roi_panel: tk.Frame
+    roi_header_label: tk.Label
+    roi_row_labels: List[Tuple[tk.Label, tk.Label]]
+    roi_header: Optional[str] = None
+    # (pairing label, percentage) per entry/exit pairing, sorted from highest
+    # ROI to lowest. A percentage of None means the entry price was zero.
+    roi_results: Optional[List[Tuple[str, Optional[float]]]] = None
 
     def __init__(
         self, tk: ModuleType, ttk: ModuleType,
@@ -119,6 +140,7 @@ class PyTradeViz:
 
         #set up window and frames
         self.initialize_window(tk)
+        self.initialize_menu_bar(tk)
 
         #set up frames
         self.initialize_frames(ttk)
@@ -169,6 +191,68 @@ class PyTradeViz:
         self.window.geometry(self.window_geo)
         self.window.minsize(self.window_min_width, self.window_min_height)
         self.window.resizable(True, True)
+
+    def initialize_menu_bar(self, tk: ModuleType) -> None:
+        self.menu_bar = tk.Menu(self.window, tearoff=0)
+        self.menu_bar.add_cascade(label="File", menu=self.initialize_file_menu(tk))
+        self.menu_bar.add_cascade(label="Indicators", menu=self.initialize_indicators_menu(tk))
+        self.menu_bar.add_command(label="Strategies", command=self.open_strategies)
+        self.window.configure(menu=self.menu_bar)
+
+    def initialize_file_menu(self, tk: ModuleType) -> Any:
+        file_menu = tk.Menu(self.menu_bar, tearoff=0)
+        file_menu.add_command(label="Open Data File", command=self.open_data_file)
+        file_menu.add_command(label="Close Data File", command=self.close_data_file)
+        file_menu.add_command(label="About", command=lambda: self.open_about_window(tk))
+        file_menu.add_command(label="Exit", command=self.window.destroy)
+        return file_menu
+
+    def open_data_file(self) -> None:
+        # Placeholder until data file loading is implemented.
+        pass
+
+    def close_data_file(self) -> None:
+        # Placeholder until data file closing is implemented.
+        pass
+
+    def open_about_window(self, tk: ModuleType) -> None:
+        window = self.open_modal_window(tk, "About PyTradeViz")
+        about_text = (
+            "PyTradeViz - Alpha\n"
+            "Version: alpha 0.0.1\n"
+            "Python: {}\n\n"
+            "Candlestick chart viewer for CryptoDataDownload price data."
+        ).format(platform.python_version())
+        tk.Label(window, text=about_text, justify="left", padx=16, pady=12).pack()
+        tk.Button(window, text="OK", width=8, command=window.destroy).pack(pady=(0, 12))
+
+    def open_strategies(self) -> None:
+        # Placeholder until strategies are implemented.
+        pass
+
+    def initialize_indicators_menu(self, tk: ModuleType) -> Any:
+        indicators_menu = tk.Menu(self.menu_bar, tearoff=0)
+        moving_averages_menu = tk.Menu(indicators_menu, tearoff=0)
+        for name in ("Exponential", "Simple"):
+            moving_averages_menu.add_command(
+                label=name, command=lambda name=name: self.open_moving_average_window(tk, name),
+            )
+        indicators_menu.add_cascade(label="Moving Averages", menu=moving_averages_menu)
+        indicators_menu.add_cascade(label="RSI", menu=tk.Menu(indicators_menu, tearoff=0))
+        indicators_menu.add_cascade(label="Bollinger", menu=tk.Menu(indicators_menu, tearoff=0))
+        return indicators_menu
+
+    def open_moving_average_window(self, tk: ModuleType, name: str) -> None:
+        self.open_modal_window(tk, name)
+
+    def open_modal_window(self, tk: ModuleType, title: str) -> Any:
+        # Selecting a menu item already unposts the menus; this opens the modal dialog.
+        window = tk.Toplevel(self.window)
+        window.title(title)
+        window.transient(self.window)
+        window.wait_visibility()
+        window.grab_set()
+        return window
 
     def initialize_charts(self, price_data: Optional[List[List[Any]]] = None) -> None:
 
@@ -284,7 +368,7 @@ class PyTradeViz:
         self.frame_canvas_indicators.grid(row=2, column=0, sticky="ew")
         self.scrollbar_horizontal.grid(row=3, column=0, sticky="ew")
         self.load_more_button.grid(row=2, column=1, sticky="nsw")
-        self.select_button.grid(row=3, column=1, sticky="nsw")
+        self.mode_button_frame.grid(row=3, column=1, sticky="nsw")
         self.dark_mode_button.grid(row=1, column=1, sticky="nsw")
         self.scrollbar_vertical.grid(row=0, column=2, sticky="ns")
         self.canvas.grid(row=0, column=0, sticky="nsew")
@@ -373,10 +457,17 @@ class PyTradeViz:
     def initialize_select_mode_button(self, ttk: ModuleType, tk: ModuleType) -> None:
         # Black in both themes, matching the other button icons.
         self.select_icon = self.make_candle_group_icon(tk, self.light_theme["ink"])
+        self.mode_button_frame = ttk.Frame(self.window)
         self.select_button = ttk.Button(
-            self.window, image=self.select_icon,
+            self.mode_button_frame, image=self.select_icon,
             command=self.toggle_selection_mode,
         )
+        self.select_button.grid(row=0, column=0, sticky="nsw")
+        # width=0 sizes the button to its text; the ttk default minimum is about 9 characters.
+        self.roi_button = ttk.Button(
+            self.mode_button_frame, text="ROI", width=0, command=self.toggle_roi_mode,
+        )
+        self.roi_button.grid(row=0, column=1, sticky="nsw", padx=(4, 0))
 
     def make_candle_group_icon(self, tk: ModuleType, ink: str) -> Any:
         icon = tk.PhotoImage(master=self.window, width=18, height=18)
@@ -403,18 +494,44 @@ class PyTradeViz:
 
     def toggle_selection_mode(self) -> None:
         self.selection_mode = not self.selection_mode
-        self._box_origin = None
-        if self.selected_indices or self._selection_box is not None:
-            self.set_selection(set(), None)
         if self.selection_mode:
-            self.select_mode_label.place(
-                relx=1.0, x=-8, y=self.select_label_y, anchor="ne"
-            )
-            self.select_mode_label.lift()
-            self.select_button.state(["pressed"])
+            self.roi_mode = False
+        self.clear_gesture_state()
+        self.update_mode_widgets()
+
+    def toggle_roi_mode(self) -> None:
+        self.roi_mode = not self.roi_mode
+        if self.roi_mode:
+            self.selection_mode = False
+        self.clear_gesture_state()
+        self.update_mode_widgets()
+
+    def clear_gesture_state(self) -> None:
+        self._box_origin = None
+        self._roi_span = None
+        self.roi_header = None
+        self.roi_results = None
+        self.set_selection(set(), None)
+
+    def update_mode_widgets(self) -> None:
+        if self.selection_mode or self.roi_mode:
+            text = "ROI mode enabled" if self.roi_mode else "select mode enabled"
+            self.select_mode_label.configure(text=text)
+            self.place_mode_label()
         else:
             self.select_mode_label.place_forget()
-            self.select_button.state(["!pressed"])
+        self.select_button.state(["pressed" if self.selection_mode else "!pressed"])
+        self.roi_button.state(["pressed" if self.roi_mode else "!pressed"])
+
+    def place_mode_label(self) -> None:
+        # Sit below the ROI panel while it is shown, otherwise below the OHLC box.
+        if self.roi_mode and self.roi_results is not None:
+            self.roi_panel.update_idletasks()
+            y = 8 + self.roi_panel.winfo_reqheight() + 8
+        else:
+            y = self.select_label_y
+        self.select_mode_label.place(relx=1.0, x=-8, y=y, anchor="ne")
+        self.select_mode_label.lift()
 
     def toggle_dark_mode(self) -> None:
         self.dark_mode = not self.dark_mode
@@ -431,6 +548,7 @@ class PyTradeViz:
         self.restyle_candles()
         self.candle_info_label.configure(bg=theme["canvas"], fg=theme["ink"])
         self.select_mode_label.configure(bg=theme["canvas"], fg=theme["ink"])
+        self.render_roi_panel()
         self.dark_mode_button.configure(text="☀" if self.dark_mode else "☾")
         self.draw_overlays()
 
@@ -549,7 +667,7 @@ class PyTradeViz:
 
     def scroll_start(self, event: tk.Event) -> None:
         self._press_position = (event.x, event.y)
-        if self.selection_mode:
+        if self.selection_mode or self.roi_mode:
             if event.widget is self.canvas:
                 self._box_origin = (self.canvas.canvasx(event.x), self.canvas.canvasy(event.y))
                 self._box_current = self._box_origin
@@ -563,14 +681,19 @@ class PyTradeViz:
 
     def scroll_move(self, event: tk.Event) -> None:
         self.crosshair_root = (event.x_root, event.y_root)
-        if self.selection_mode:
+        if self.selection_mode or self.roi_mode:
             if self._box_origin is not None:
                 self._box_current = (
                     self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
                 )
-                self._selection_box = self.box_from_canvas(
-                    self._box_origin, self._box_current
-                )
+                if self.roi_mode:
+                    self._roi_span = self.span_from_canvas(
+                        self._box_origin[0], self._box_current[0]
+                    )
+                else:
+                    self._selection_box = self.box_from_canvas(
+                        self._box_origin, self._box_current
+                    )
                 self.draw_overlays()
             return
         if event.widget is self.canvas:
@@ -588,6 +711,21 @@ class PyTradeViz:
             relief="solid", bd=1, padx=6, pady=4,
         )
         self.candle_info_label.place_forget()
+        self.roi_panel = tk.Frame(
+            self.frame_canvas, relief="solid", bd=1, padx=6, pady=4,
+            bg=self.get_theme()["canvas"],
+        )
+        self.roi_header_label = tk.Label(self.roi_panel, anchor="w")
+        self.roi_header_label.grid(row=0, column=0, columnspan=2, sticky="w")
+        self.roi_row_labels = []
+        for _ in itertools.product(self.roi_price_fields, repeat=2):
+            name_label = tk.Label(self.roi_panel, anchor="w")
+            value_label = tk.Label(self.roi_panel, anchor="e")
+            name_label.grid(row=len(self.roi_row_labels) + 1, column=0, sticky="w")
+            value_label.grid(row=len(self.roi_row_labels) + 1, column=1, sticky="e")
+            self.roi_row_labels.append((name_label, value_label))
+        self.roi_panel.place_forget()
+        self.render_roi_panel()
 
     def candle_index_at(self, x: float, y: float, tolerance: int = 4) -> Optional[int]:
         for item in self.canvas.find_overlapping(
@@ -607,6 +745,9 @@ class PyTradeViz:
         self.candle_info_label.lift()
 
     def select_candle(self, event: tk.Event) -> None:
+        if self.roi_mode:
+            self.finish_roi(event)
+            return
         if self.selection_mode:
             self.finish_box_select(event)
             return
@@ -764,24 +905,37 @@ class PyTradeViz:
         return (x1 / self._scale_x, x2 / self._scale_x,
                 self.price_at(y1), self.price_at(y2))
 
+    def span_from_canvas(self, first_x: float, second_x: float) -> Tuple[float, float]:
+        x1, x2 = sorted((first_x, second_x))
+        return x1 / self._scale_x, x2 / self._scale_x
+
     def clear_selection_box(self) -> None:
         self.canvas.delete("selection")
 
-    def draw_selection_box(self) -> None:
-        if self._selection_box is None:
-            return
+    def draw_selection_region(self, x1: float, y1: float, x2: float, y2: float) -> None:
         self.clear_selection_box()
-        left, right, top, bottom = self._selection_box
         color = self.get_theme()["selection"]
         self.canvas.create_rectangle(
-            left * self._scale_x, self.price_to_y(top),
-            right * self._scale_x, self.price_to_y(bottom),
+            x1, y1, x2, y2,
             fill=color, stipple="gray50", outline=color, dash=(4, 4), width=1,
             tags=("selection",),
         )
         # Keep the tint under the candles so their highlight colors stay visible.
         if self.canvas.find_withtag("candle"):
             self.canvas.tag_lower("selection", "candle")
+
+    def draw_selection_box(self) -> None:
+        if self._roi_span is not None:
+            left, right = self._roi_span
+            self.draw_selection_region(
+                left * self._scale_x, 0, right * self._scale_x, self.chart_grid_space_y
+            )
+        elif self._selection_box is not None:
+            left, right, top, bottom = self._selection_box
+            self.draw_selection_region(
+                left * self._scale_x, self.price_to_y(top),
+                right * self._scale_x, self.price_to_y(bottom),
+            )
 
     def draw_overlays(self) -> None:
         self.draw_selection_box()
@@ -813,6 +967,51 @@ class PyTradeViz:
             self.box_from_canvas(origin, current),
         )
 
+    def finish_roi(self, event: tk.Event) -> None:
+        origin = self._box_origin
+        self._box_origin = None
+        if origin is None or self._press_position is None:
+            return
+        press_x, press_y = self._press_position
+        if abs(event.x - press_x) + abs(event.y - press_y) <= self.click_drag_threshold:
+            self.clear_gesture_state()
+            return
+        release_x = self.canvas.canvasx(event.x)
+        entry_index = self.index_at_chart_x(origin[0])
+        exit_index = self.index_at_chart_x(release_x)
+        entry_row = self.price_data[entry_index]
+        exit_row = self.price_data[exit_index]
+        self.roi_results = []
+        for (_, entry_abbr, entry_col), (_, exit_abbr, exit_col) in itertools.product(
+            self.roi_price_fields, repeat=2
+        ):
+            entry_price, exit_price = entry_row[entry_col], exit_row[exit_col]
+            label = f"ent({entry_abbr}):ext({exit_abbr}) -> "
+            if entry_price == 0:
+                self.roi_results.append((label, None))
+            else:
+                percent = (exit_price - entry_price) / entry_price * 100
+                self.roi_results.append((label, percent))
+        # Highest ROI first; rows without a percentage go last.
+        self.roi_results.sort(key=lambda result: (result[1] is None, -(result[1] or 0)))
+        self.roi_header = (
+            f"Entry: {self.date_at(entry_index)}  Exit: {self.date_at(exit_index)}"
+        )
+        x1, x2 = sorted((origin[0], release_x))
+        self._roi_span = self.span_from_canvas(origin[0], release_x)
+        self.set_selection(
+            self.candle_indices_in(x1, 0, x2, self.chart_grid_space_y), None
+        )
+
+    def index_at_chart_x(self, chart_x: float) -> int:
+        # Clamped so a drag that starts or ends beyond the data still has a candle.
+        base_x = chart_x / self._scale_x
+        index = round((base_x - self.chart_padding_x) / self.chart_grid_divider_v)
+        return min(max(index, 0), len(self.price_data) - 1)
+
+    def date_at(self, index: int) -> str:
+        return "-".join(self.price_data[index][0])
+
     def set_selection(self, indices: Set[int], box: Optional[Tuple[float, float, float, float]]) -> None:
         changed = self.selected_indices ^ indices
         self.selected_indices = set(indices)
@@ -820,10 +1019,49 @@ class PyTradeViz:
         self.restyle_candles(changed)
         self.clear_selection_box()
         self.draw_overlays()
-        if self.selected_indices:
+        self.refresh_info_label()
+
+    def refresh_info_label(self) -> None:
+        if self.roi_mode:
+            self.candle_info_label.place_forget()
+            if self.roi_results is None:
+                self.roi_panel.place_forget()
+            else:
+                self.render_roi_panel()
+                self.roi_panel.place(relx=1.0, x=-8, y=8, anchor="ne")
+                self.roi_panel.lift()
+            self.place_mode_label()
+        elif self.selected_indices:
+            self.roi_panel.place_forget()
             self.show_selection_summary()
         else:
+            self.roi_panel.place_forget()
             self.candle_info_label.place_forget()
+
+    def render_roi_panel(self) -> None:
+        theme = self.get_theme()
+        self.roi_panel.configure(bg=theme["canvas"])
+        header = "" if self.roi_header is None else self.roi_header
+        self.roi_header_label.configure(text=header, bg=theme["canvas"], fg=theme["ink"])
+        results = self.roi_results
+        for index, (name_label, value_label) in enumerate(self.roi_row_labels):
+            name_label.configure(bg=theme["canvas"], fg=theme["ink"])
+            if results is None:
+                name_text, text, color = "", "", theme["ink"]
+            else:
+                name_text, percent = results[index]
+                if percent is None:
+                    text, color = "n/a", theme["ink"]
+                else:
+                    text = f"{percent:+.2f}%"
+                    if percent > 0:
+                        color = theme["gain"]
+                    elif percent < 0:
+                        color = theme["loss"]
+                    else:
+                        color = theme["ink"]
+            name_label.configure(text=name_text)
+            value_label.configure(text=text, bg=theme["canvas"], fg=color)
 
     def show_selection_summary(self) -> None:
         indices = sorted(self.selected_indices)

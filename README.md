@@ -28,6 +28,16 @@ shows the average open, high, low, and close of the selection. Clicking a single
 candle selects only that candle, and clicking empty space clears the selection.
 Drag-panning is disabled while selection mode is on; the scrollbars and Ctrl
 zoom still work. Turning selection mode off clears the selection.
+The ROI button beside the candle-group button toggles ROI mode, which shows a
+"ROI mode enabled" label in place of the select-mode label. Click and drag across
+the chart, then release: the column between the press and release points is
+drawn full height and the candles inside it are highlighted. The top-right panel
+lists the entry and exit dates, then the percentage change for every pairing of
+entry and exit price (open, high, low, close), in the form
+`ent(O):ext(C) -> +1.23%`, sorted from highest ROI to lowest. The entry candle is the one under the press point
+and the exit candle is the one under the release point. Gains are green and losses
+are red. ROI mode and select mode are mutually exclusive, and turning either on
+clears the current selection and ROI result.
 The window can be resized or maximized.
 
 Run the tests with `python3 -m unittest discover -s tests -v`. Tk integration
