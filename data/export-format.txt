@@ -1,0 +1,101 @@
+JSON Format:
+{
+"label0":
+	[
+		"label0_candle_0": 
+			{
+				"open":###, 
+				"high":###, 
+				"low":###, 
+				"close":###, 
+				"rsi": ###, 
+				"3d_sma": ###, 
+				"7d_sma": ###, 
+				"2wk_sma": ###, 
+				"1mo_sma":###
+			},
+		"label0_candle_1": 
+			{
+				"open":###, 
+				"high":###, 
+				"low":###, 
+				"close":###, 
+				"rsi": ###, 
+				"3d_sma": ###, 
+				"7d_sma": ###, 
+				"2wk_sma": ###, 
+				"1mo_sma":###
+			},
+		"label0_candle_N": 
+			{
+				"open":###, 
+				"high":###, 
+				"low":###, 
+				"close":###, 
+				"rsi": ###, 
+				"3d_sma": ###, 
+				"7d_sma": ###, 
+				"2wk_sma": ###, 
+				"1mo_sma":###
+			}
+	],
+"label1":
+	[
+		"label1_candle_0": 
+			{
+				"open":###, 
+				"high":###, 
+				"low":###, 
+				"close":###, 
+				"rsi": ###, 
+				"3d_sma": ###, 
+				"7d_sma": ###, 
+				"2wk_sma": ###, 
+				"1mo_sma":###
+			},
+		"label1_candle_1": 
+			{
+				"open":###, 
+				"high":###, 
+				"low":###, 
+				"close":###, 
+				"rsi": ###, 
+				"3d_sma": ###, 
+				"7d_sma": ###, 
+				"2wk_sma": ###, 
+				"1mo_sma":###
+			},
+		"label1_candle_N": 
+			{
+				"open":###, 
+				"high":###, 
+				"low":###, 
+				"close":###, 
+				"rsi": ###, 
+				"3d_sma": ###, 
+				"7d_sma": ###, 
+				"2wk_sma": ###, 
+				"1mo_sma":###
+			}
+	]
+	
+}
+
+
+XML Format:
+
+<Selections>
+	<Label0>
+		<Label0Candle0 open="" high="" low="" close="" rsi="" ... />
+		<Label0Candle1 open="" high="" low="" close="" rsi="" ... />
+		<Label0Candle2 open="" high="" low="" close="" rsi="" ... />
+		
+	</Label0>
+	<Label1>
+		<Label1Candle0 open="" high="" low="" close="" rsi="" ... />
+		<Label1Candle1 open="" high="" low="" close="" rsi="" ... />
+		<Label1Candle2 open="" high="" low="" close="" rsi="" ... />
+	</Label1>
+
+
+</Selections>

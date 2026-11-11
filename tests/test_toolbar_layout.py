@@ -30,11 +30,23 @@ class ToolbarLayoutTests(unittest.TestCase):
         text_width = tkfont.nametofont("TkDefaultFont").measure("ROI")
         self.assertLessEqual(self.viz.roi_button.winfo_reqwidth(), text_width + 16)
 
-    def test_price_canvas_fills_its_column(self) -> None:
+    def test_price_column_is_not_widened_by_toolbox(self) -> None:
         frame = self.viz.frame_canvas_price
-        self.assertEqual(frame.winfo_x(), self.viz.mode_button_frame.winfo_x())
-        self.assertEqual(frame.winfo_x() + frame.winfo_width(), self.viz.scrollbar_vertical.winfo_x())
+        self.assertEqual(frame.winfo_width(), frame.winfo_reqwidth())
+        self.assertLessEqual(frame.winfo_width(), 110)
         self.assertEqual(self.viz.canvas_price.winfo_width(), frame.winfo_width())
+
+    def test_candle_canvas_reaches_price_column(self) -> None:
+        frame = self.viz.frame_canvas
+        self.assertEqual(frame.winfo_x() + frame.winfo_width(), self.viz.frame_canvas_price.winfo_x())
+        self.assertEqual(self.viz.frame_canvas_price.winfo_x() + self.viz.frame_canvas_price.winfo_width(),
+                         self.viz.scrollbar_vertical.winfo_x())
+
+    def test_toolbox_sits_at_bottom_right_of_candle_area(self) -> None:
+        toolbox = self.viz.mode_button_frame
+        self.assertEqual(toolbox.winfo_x() + toolbox.winfo_width(),
+                         self.viz.bottom_bar.winfo_x() + self.viz.bottom_bar.winfo_width())
+        self.assertEqual(self.viz.bottom_bar.winfo_width(), self.viz.frame_canvas.winfo_width())
 
     def destroy_window(self) -> None:
         # The Exit menu item may already have destroyed the window.
@@ -49,7 +61,7 @@ class ToolbarLayoutTests(unittest.TestCase):
 
     def test_menu_bar_structure(self) -> None:
         menu_bar = self.viz.window.nametowidget(self.viz.window.cget("menu"))
-        self.assertEqual(self.menu_labels(menu_bar), ["File", "Indicators", "Strategies"])
+        self.assertEqual(self.menu_labels(menu_bar), ["File", "Indicators", "Strategies", "Data"])
         indicators = menu_bar.nametowidget(menu_bar.entrycget(1, "menu"))
         self.assertEqual(self.menu_labels(indicators), ["Moving Averages", "RSI", "Bollinger"])
         moving_averages = indicators.nametowidget(indicators.entrycget(0, "menu"))

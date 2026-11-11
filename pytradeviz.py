@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 import csv
 import itertools
+import os
 import platform
 from types import ModuleType
 from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
@@ -11,6 +12,10 @@ from candle import Candle
 import datetime as datetime
 import math
 from indicators import Indicators, SMA_PERIODS, HIGH_COLUMN, LOW_COLUMN
+from labeled_selections import (
+    EXPORT_DIRECTORY, MOVING_AVERAGE_FIELDS, Selections, export_path, merge_selections,
+    read_selections, write_selections,
+)
 
 
 class PriceDataSource(Protocol):
@@ -83,6 +88,7 @@ class PyTradeViz:
     frame_canvas_indicators: ttk.Frame
     frame_canvas_price: ttk.Frame
     frame_canvas_date: ttk.Frame
+    bottom_bar: ttk.Frame
     scrollbar_horizontal: ttk.Scrollbar
     scrollbar_vertical: ttk.Scrollbar
     load_more_button: ttk.Button
@@ -117,6 +123,11 @@ class PyTradeViz:
     mode_button_frame: ttk.Frame
     roi_button: ttk.Button
     roi_mode: bool = False
+    export_mode: bool = False
+    export_button: ttk.Button
+    # Labels map to candle records, in the order the selections were saved.
+    labeled_selections: Selections
+    export_directory: str = EXPORT_DIRECTORY
     # Column of the last ROI drag as (left x, right x), unscaled like the box.
     _roi_span: Optional[Tuple[float, float]] = None
     # Each ROI row pairs an entry price field with an exit price field.
@@ -141,6 +152,7 @@ class PyTradeViz:
         self.price_data_object=price_data_object
         self.price_data=price_data_object["price_data"]
         self.selected_indices = set()
+        self.labeled_selections = {}
         self.data_source = data_source
         self.indicators_object = Indicators()
         self.indicators_object.set_price_data(self.price_data)
@@ -216,6 +228,7 @@ class PyTradeViz:
         self.menu_bar.add_cascade(label="File", menu=self.initialize_file_menu(tk))
         self.menu_bar.add_cascade(label="Indicators", menu=self.initialize_indicators_menu(tk))
         self.menu_bar.add_command(label="Strategies", command=self.open_strategies)
+        self.menu_bar.add_command(label="Data", command=lambda: self.open_data_window(tk))
         self.window.configure(menu=self.menu_bar)
 
     def initialize_file_menu(self, tk: ModuleType) -> Any:
@@ -248,6 +261,131 @@ class PyTradeViz:
     def open_strategies(self) -> None:
         # Placeholder until strategies are implemented.
         pass
+
+    def open_data_window(self, tk: ModuleType) -> None:
+        window = self.open_modal_window(tk, "Data")
+        listing = tk.Frame(window)
+        listing.pack(fill="both", expand=True, padx=12, pady=(12, 0))
+        self.fill_data_listing(tk, listing)
+        buttons = tk.Frame(window)
+        buttons.pack(fill="x", padx=12, pady=12)
+        tk.Button(buttons, text="Close", width=12, command=window.destroy).pack(side="right")
+        tk.Button(
+            buttons, text="Clear", width=12,
+            command=lambda: self.clear_labeled_selections(tk, window, listing),
+        ).pack(side="left", padx=(0, 24))
+        tk.Button(
+            buttons, text="Add To Existing...", width=16,
+            command=lambda: self.add_to_existing(window),
+        ).pack(side="right", padx=(0, 8))
+        tk.Button(
+            buttons, text="Export to XML", width=14,
+            command=lambda: self.export_labeled_selections(window, "xml"),
+        ).pack(side="left")
+        tk.Button(
+            buttons, text="Export to JSON", width=14,
+            command=lambda: self.export_labeled_selections(window, "json"),
+        ).pack(side="left", padx=(8, 0))
+
+    def fill_data_listing(self, tk: ModuleType, listing: Any) -> None:
+        for child in listing.winfo_children():
+            child.destroy()
+        if self.labeled_selections:
+            list_box = tk.Listbox(listing, width=48, height=12)
+            list_box.pack(fill="both", expand=True)
+            for label, records in self.labeled_selections.items():
+                list_box.insert("end", f"{label}: {len(records)} candles")
+        else:
+            tk.Label(listing, text="No labeled selections yet.").pack(anchor="w")
+
+    def clear_labeled_selections(self, tk: ModuleType, window: Any, listing: Any) -> None:
+        if not self.labeled_selections:
+            return
+        if not messagebox.askyesno(
+            "Clear selections", "Remove all labeled selections? This cannot be undone.", parent=window,
+        ):
+            return
+        self.labeled_selections.clear()
+        self.fill_data_listing(tk, listing)
+
+    def export_labeled_selections(self, window: Any, extension: str) -> None:
+        if not self.labeled_selections:
+            messagebox.showinfo("Export", "There are no labeled selections to export.", parent=window)
+            return
+        path = export_path(self.export_directory, extension, datetime.datetime.now())
+        try:
+            write_selections(path, self.labeled_selections)
+        except OSError as error:
+            messagebox.showerror("Unable to export", str(error), parent=window)
+            return
+        messagebox.showinfo("Export complete", f"Saved to {path}", parent=window)
+
+    def add_to_existing(self, window: Any) -> None:
+        if not self.labeled_selections:
+            messagebox.showinfo("Add To Existing", "There are no labeled selections to add.", parent=window)
+            return
+        path = filedialog.askopenfilename(
+            parent=window, title="Add selections to an export",
+            initialdir=self.export_directory,
+            filetypes=[("Labeled selections", "*.json *.xml"), ("JSON", "*.json"), ("XML", "*.xml")],
+        )
+        if not path:
+            return
+        try:
+            merged = merge_selections(read_selections(path), self.labeled_selections)
+            write_selections(path, merged)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Unable to add selections", str(error), parent=window)
+            return
+        count = sum(len(records) for records in self.labeled_selections.values())
+        messagebox.showinfo(
+            "Selections added", f"Added {count} candles to {os.path.basename(path)}", parent=window,
+        )
+
+    def open_label_window(self, indices: Set[int]) -> None:
+        window = self.open_modal_window(tk, "Label selection")
+        tk.Label(
+            window, text=f"Enter a label for the {len(indices)} selected candle(s):",
+        ).pack(anchor="w", padx=12, pady=(12, 4))
+        entry = tk.Entry(window, width=40)
+        entry.pack(fill="x", padx=12)
+        entry.focus_set()
+
+        def save(_event: Any = None) -> None:
+            label = entry.get().strip()
+            if not label:
+                messagebox.showwarning("Label required", "Enter a label for the selection.", parent=window)
+                entry.focus_set()
+                return
+            self.save_labeled_selection(label, indices)
+            window.destroy()
+
+        def cancel(_event: Any = None) -> None:
+            self.set_selection(set(), None)
+            window.destroy()
+
+        buttons = tk.Frame(window)
+        buttons.pack(fill="x", padx=12, pady=12)
+        tk.Button(buttons, text="Cancel", width=8, command=cancel).pack(side="right")
+        tk.Button(buttons, text="Save", width=8, command=save).pack(side="right", padx=(0, 8))
+        window.bind("<Return>", save)
+        window.bind("<Escape>", cancel)
+        window.protocol("WM_DELETE_WINDOW", cancel)
+
+    def save_labeled_selection(self, label: str, indices: Set[int]) -> None:
+        records = [self.labeled_candle_record(index) for index in sorted(indices)]
+        self.labeled_selections.setdefault(label, []).extend(records)
+        self.set_selection(set(), None)
+
+    def labeled_candle_record(self, index: int) -> Dict[str, Optional[float]]:
+        _, open_, high, low, close, indicators = self.price_data[index][:6]
+        record: Dict[str, Optional[float]] = {
+            "open": open_, "high": high, "low": low, "close": close,
+            "rsi": indicators["rsi"],
+        }
+        for period, field in MOVING_AVERAGE_FIELDS.items():
+            record[field] = self.indicators_object.calculate_SMA(period)[index]
+        return record
 
     def initialize_indicators_menu(self, tk: ModuleType) -> Any:
         indicators_menu = tk.Menu(self.menu_bar, tearoff=0)
@@ -371,7 +509,7 @@ class PyTradeViz:
 
     def initialize_scrollbars(self, ttk: ModuleType, tk: ModuleType) -> None:
         self.scrollbar_horizontal = ttk.Scrollbar(
-            self.window, orient=tk.HORIZONTAL, command=self.scroll_xview
+            self.bottom_bar, orient=tk.HORIZONTAL, command=self.scroll_xview
         )
         self.scrollbar_vertical = ttk.Scrollbar(
             self.window, orient=tk.VERTICAL, command=self.scroll_yview
@@ -387,6 +525,8 @@ class PyTradeViz:
         self.frame_canvas_indicators = ttk.Frame(self.window, width=self.canvas_width, height=100)
         self.frame_canvas_price = ttk.Frame(self.window, width=100, height=500)
         self.frame_canvas_date = ttk.Frame(self.window, width=self.canvas_width, height=50)
+        # Holds the horizontal scrollbar and toolbox so neither widens the price column.
+        self.bottom_bar = ttk.Frame(self.window)
 
     def configure_all_canvas(self) -> None:
         self.canvas.configure(background=self.get_theme()["canvas"])
@@ -431,12 +571,13 @@ class PyTradeViz:
         self.frame_canvas_indicators.grid_columnconfigure(0, weight=1)
 
         self.frame_canvas.grid(row=0, column=0, sticky="nsew")
-        self.frame_canvas_price.grid(row=0, column=1, sticky="ns")
+        self.frame_canvas_price.grid(row=0, column=1, sticky="nsew")
         self.frame_canvas_date.grid(row=1, column=0, sticky="ew")
         self.frame_canvas_indicators.grid(row=2, column=0, sticky="ew")
-        self.scrollbar_horizontal.grid(row=3, column=0, sticky="ew")
+        self.bottom_bar.grid(row=3, column=0, sticky="ew")
+        self.mode_button_frame.pack(side="right")
+        self.scrollbar_horizontal.pack(side="left", fill="x", expand=True)
         self.load_more_button.grid(row=2, column=1, sticky="nsw")
-        self.mode_button_frame.grid(row=3, column=1, sticky="nsw")
         self.dark_mode_button.grid(row=1, column=1, sticky="nsw")
         self.scrollbar_vertical.grid(row=0, column=2, sticky="ns")
         self.canvas.grid(row=0, column=0, sticky="nsew")
@@ -525,7 +666,7 @@ class PyTradeViz:
     def initialize_select_mode_button(self, ttk: ModuleType, tk: ModuleType) -> None:
         # Black in both themes, matching the other button icons.
         self.select_icon = self.make_candle_group_icon(tk, self.light_theme["ink"])
-        self.mode_button_frame = ttk.Frame(self.window)
+        self.mode_button_frame = ttk.Frame(self.bottom_bar)
         self.select_button = ttk.Button(
             self.mode_button_frame, image=self.select_icon,
             command=self.toggle_selection_mode,
@@ -536,6 +677,10 @@ class PyTradeViz:
             self.mode_button_frame, text="ROI", width=0, command=self.toggle_roi_mode,
         )
         self.roi_button.grid(row=0, column=1, sticky="nsw", padx=(4, 0))
+        self.export_button = ttk.Button(
+            self.mode_button_frame, text="{</>}", width=0, command=self.toggle_export_mode,
+        )
+        self.export_button.grid(row=0, column=2, sticky="nsw", padx=(4, 0))
 
     def make_candle_group_icon(self, tk: ModuleType, ink: str) -> Any:
         icon = tk.PhotoImage(master=self.window, width=18, height=18)
@@ -563,16 +708,33 @@ class PyTradeViz:
     def toggle_selection_mode(self) -> None:
         self.selection_mode = not self.selection_mode
         if self.selection_mode:
-            self.roi_mode = False
+            self.roi_mode = self.export_mode = False
         self.clear_gesture_state()
         self.update_mode_widgets()
 
     def toggle_roi_mode(self) -> None:
         self.roi_mode = not self.roi_mode
         if self.roi_mode:
-            self.selection_mode = False
+            self.selection_mode = self.export_mode = False
         self.clear_gesture_state()
         self.update_mode_widgets()
+
+    def toggle_export_mode(self) -> None:
+        self.export_mode = not self.export_mode
+        if self.export_mode:
+            self.selection_mode = self.roi_mode = False
+        self.clear_gesture_state()
+        self.update_mode_widgets()
+
+    def exit_modes(self) -> None:
+        if not self.gesture_active():
+            return
+        self.selection_mode = self.roi_mode = self.export_mode = False
+        self.clear_gesture_state()
+        self.update_mode_widgets()
+
+    def gesture_active(self) -> bool:
+        return self.selection_mode or self.roi_mode or self.export_mode
 
     def clear_gesture_state(self) -> None:
         self._box_origin = None
@@ -582,14 +744,20 @@ class PyTradeViz:
         self.set_selection(set(), None)
 
     def update_mode_widgets(self) -> None:
-        if self.selection_mode or self.roi_mode:
-            text = "ROI mode enabled" if self.roi_mode else "select mode enabled"
+        if self.gesture_active():
+            if self.roi_mode:
+                text = "ROI mode enabled"
+            elif self.export_mode:
+                text = "select and export mode"
+            else:
+                text = "select mode enabled"
             self.select_mode_label.configure(text=text)
             self.place_mode_label()
         else:
             self.select_mode_label.place_forget()
         self.select_button.state(["pressed" if self.selection_mode else "!pressed"])
         self.roi_button.state(["pressed" if self.roi_mode else "!pressed"])
+        self.export_button.state(["pressed" if self.export_mode else "!pressed"])
 
     def place_mode_label(self) -> None:
         # Sit below the ROI panel while it is shown, otherwise below the OHLC box.
@@ -735,7 +903,7 @@ class PyTradeViz:
 
     def scroll_start(self, event: tk.Event) -> None:
         self._press_position = (event.x, event.y)
-        if self.selection_mode or self.roi_mode:
+        if self.gesture_active():
             if event.widget is self.canvas:
                 self._box_origin = (self.canvas.canvasx(event.x), self.canvas.canvasy(event.y))
                 self._box_current = self._box_origin
@@ -749,7 +917,7 @@ class PyTradeViz:
 
     def scroll_move(self, event: tk.Event) -> None:
         self.crosshair_root = (event.x_root, event.y_root)
-        if self.selection_mode or self.roi_mode:
+        if self.gesture_active():
             if self._box_origin is not None:
                 self._box_current = (
                     self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
@@ -815,6 +983,10 @@ class PyTradeViz:
     def select_candle(self, event: tk.Event) -> None:
         if self.roi_mode:
             self.finish_roi(event)
+            return
+        if self.export_mode:
+            if self.finish_box_select(event) and self.selected_indices:
+                self.open_label_window(set(self.selected_indices))
             return
         if self.selection_mode:
             self.finish_box_select(event)
@@ -1048,16 +1220,17 @@ class PyTradeViz:
                 indices.add(index)
         return indices
 
-    def finish_box_select(self, event: tk.Event) -> None:
+    def finish_box_select(self, event: tk.Event) -> bool:
+        """Complete a box or click selection. Returns False if no gesture was in progress."""
         origin = self._box_origin
         self._box_origin = None
         if origin is None or self._press_position is None:
-            return
+            return False
         press_x, press_y = self._press_position
         if abs(event.x - press_x) + abs(event.y - press_y) <= self.click_drag_threshold:
             index = self.candle_index_at(*origin)
             self.set_selection({index} if index is not None else set(), None)
-            return
+            return True
         current = self._box_current or origin
         x1, x2 = sorted((origin[0], current[0]))
         y1, y2 = sorted((origin[1], current[1]))
@@ -1065,6 +1238,7 @@ class PyTradeViz:
             self.candle_indices_in(x1, y1, x2, y2),
             self.box_from_canvas(origin, current),
         )
+        return True
 
     def finish_roi(self, event: tk.Event) -> None:
         origin = self._box_origin
@@ -1180,6 +1354,7 @@ class PyTradeViz:
         self.candle_info_label.lift()
 
     def event_bindings(self) -> None:
+        self.window.bind("<Escape>", lambda _event: self.exit_modes())
         self.canvas.bind("<ButtonPress-1>", self.scroll_start)
         self.canvas.bind("<ButtonRelease-1>", self.select_candle)
         self.canvas.bind("<B1-Motion>", self.scroll_move)

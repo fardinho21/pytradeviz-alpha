@@ -1,0 +1,128 @@
+from __future__ import annotations
+
+import datetime
+import os
+import tempfile
+import unittest
+
+from labeled_selections import (
+    export_path,
+    format_for_path,
+    from_json_text,
+    from_xml_text,
+    merge_selections,
+    read_selections,
+    to_json_text,
+    to_xml_text,
+    write_selections,
+    xml_tag,
+)
+
+
+def record(open_: float, sma_3d=None) -> dict:
+    return {
+        "open": open_, "high": open_ + 1, "low": open_ - 1, "close": open_ + 0.5,
+        "rsi": 55.0, "3d_sma": sma_3d, "7d_sma": None, "2wk_sma": None, "1mo_sma": None,
+    }
+
+
+class FormatTests(unittest.TestCase):
+    def test_extension_selects_format(self) -> None:
+        self.assertEqual(format_for_path("a/b/selections.JSON"), "json")
+        self.assertEqual(format_for_path("selections.xml"), "xml")
+
+    def test_other_extensions_are_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            format_for_path("selections.csv")
+
+    def test_export_path_uses_timestamp(self) -> None:
+        now = datetime.datetime(2025, 3, 4, 9, 5, 7)
+        self.assertEqual(
+            export_path("data/labeled_data", "json", now),
+            os.path.join("data/labeled_data", "selections_20250304_090507.json"),
+        )
+
+
+class MergeTests(unittest.TestCase):
+    def test_records_are_appended_per_label(self) -> None:
+        base = {"up": [record(1)]}
+        extra = {"up": [record(2)], "down": [record(3)]}
+        merged = merge_selections(base, extra)
+        self.assertEqual([r["open"] for r in merged["up"]], [1, 2])
+        self.assertEqual([r["open"] for r in merged["down"]], [3])
+
+    def test_inputs_are_not_modified(self) -> None:
+        base = {"up": [record(1)]}
+        merge_selections(base, {"up": [record(2)]})
+        self.assertEqual(len(base["up"]), 1)
+
+
+class JsonRoundTripTests(unittest.TestCase):
+    def test_round_trip_keeps_values_and_none(self) -> None:
+        selections = {"up trend": [record(10, sma_3d=9.5)]}
+        restored = from_json_text(to_json_text(selections))
+        self.assertEqual(restored, selections)
+
+    def test_json_keys_follow_label_candle_layout(self) -> None:
+        text = to_json_text({"up": [record(1), record(2)]})
+        self.assertIn('"up_candle_0"', text)
+        self.assertIn('"up_candle_1"', text)
+
+    def test_invalid_json_raises_value_error(self) -> None:
+        with self.assertRaises(ValueError):
+            from_json_text("{not json")
+
+    def test_non_numeric_value_raises_value_error(self) -> None:
+        with self.assertRaises(ValueError):
+            from_json_text('{"up": {"up_candle_0": {"open": "abc"}}}')
+
+
+class XmlRoundTripTests(unittest.TestCase):
+    def test_round_trip_keeps_values_and_none(self) -> None:
+        selections = {"up": [record(10, sma_3d=9.5), record(11)]}
+        restored = from_xml_text(to_xml_text(selections))
+        self.assertEqual(restored, selections)
+
+    def test_label_with_spaces_is_recovered_from_attribute(self) -> None:
+        selections = {"my label 1": [record(4)]}
+        text = to_xml_text(selections)
+        self.assertIn('<my_label_1 label="my label 1">', text)
+        self.assertEqual(from_xml_text(text), selections)
+
+    def test_sma_attributes_are_valid_xml_names(self) -> None:
+        text = to_xml_text({"up": [record(1, sma_3d=2.0)]})
+        self.assertIn('sma_3d="2.0"', text)
+        self.assertNotIn(' 3d_sma=', text)
+
+    def test_invalid_xml_raises_value_error(self) -> None:
+        with self.assertRaises(ValueError):
+            from_xml_text("<Selections><unclosed></Selections>")
+
+    def test_wrong_root_raises_value_error(self) -> None:
+        with self.assertRaises(ValueError):
+            from_xml_text("<Other/>")
+
+
+class XmlTagTests(unittest.TestCase):
+    def test_invalid_characters_are_replaced(self) -> None:
+        self.assertEqual(xml_tag("buy signal!"), "buy_signal_")
+
+    def test_leading_digit_gets_prefix(self) -> None:
+        self.assertEqual(xml_tag("1st"), "L_1st")
+
+    def test_reserved_xml_prefix_gets_prefix(self) -> None:
+        self.assertEqual(xml_tag("xml data"), "L_xml_data")
+
+
+class FileTests(unittest.TestCase):
+    def test_write_and_read_both_formats(self) -> None:
+        selections = {"up": [record(1, sma_3d=0.5)]}
+        with tempfile.TemporaryDirectory() as directory:
+            for name in ("out/selections.json", "out/selections.xml"):
+                path = os.path.join(directory, name)
+                write_selections(path, selections)
+                self.assertEqual(read_selections(path), selections)
+
+
+if __name__ == "__main__":
+    unittest.main()
