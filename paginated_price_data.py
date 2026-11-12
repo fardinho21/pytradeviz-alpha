@@ -1,9 +1,12 @@
 """Chronological, calendar-based pagination of descending price CSV files.
 
-The CSV has two header records by default, configurable with ``skip_lines``,
-followed by records in strictly descending timestamp order. Dates use
-``YYYY-MM-DD HH:MM:SS`` in column 1 and OHLC values
-are in columns 3 through 6. Timestamps and record offsets, including those of
+The header row is located by name: a record that names a date column (``date``
+or ``datetime``) and ``open``, ``high``, ``low`` and ``close``, matched without
+regard to case. Other columns are ignored. Records follow the header in strictly
+descending timestamp order, and dates use ``YYYY-MM-DD HH:MM:SS``. When no
+header names the columns, the file is read by position instead: the first
+``skip_lines`` records are skipped, the date is in column 1 and OHLC values are
+in columns 3 through 6. Timestamps and record offsets, including those of
 quoted multiline records, are indexed at construction; rows are reread and
 OHLC values converted only when a page is requested.
 
@@ -23,7 +26,26 @@ import os
 from bisect import bisect_left
 from datetime import datetime
 from math import isfinite
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
+
+DATE_COLUMN_NAMES = ("date", "datetime")
+OHLC_COLUMN_NAMES = ("open", "high", "low", "close")
+# Positional layout used when no header record names the columns.
+POSITIONAL_COLUMNS: Dict[str, int] = {"date": 1, "open": 3, "high": 4, "low": 5, "close": 6}
+HEADER_SEARCH_RECORDS = 10
+
+
+def _named_columns(row: List[str]) -> Optional[Dict[str, int]]:
+    """Return the column index of each required field, or None if the row lacks any."""
+    positions: Dict[str, int] = {}
+    for index, name in enumerate(row):
+        positions.setdefault(name.strip().lower(), index)
+    date_name = next((name for name in DATE_COLUMN_NAMES if name in positions), None)
+    if date_name is None or any(name not in positions for name in OHLC_COLUMN_NAMES):
+        return None
+    columns = {"date": positions[date_name]}
+    columns.update({name: positions[name] for name in OHLC_COLUMN_NAMES})
+    return columns
 
 
 def _add_months(anchor: datetime, months: int) -> Optional[datetime]:
@@ -36,16 +58,17 @@ def _add_months(anchor: datetime, months: int) -> Optional[datetime]:
     return anchor.replace(year=year, month=month, day=day)
 
 
-def _parse_date(row: List[str], line: int) -> datetime:
-    if len(row) < 2:
+def _parse_date(row: List[str], line: int, column: int = 1) -> datetime:
+    if len(row) <= column:
         raise ValueError(f"CSV record ending on line {line}: missing date")
+    value = row[column]
     try:
-        date = datetime.strptime(row[1], "%Y-%m-%d %H:%M:%S")
-        if date.isoformat(sep=" ") != row[1]:
+        date = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+        if date.isoformat(sep=" ") != value:
             raise ValueError
     except ValueError as exc:
         raise ValueError(
-            f"CSV record ending on line {line}: invalid date {row[1]!r}"
+            f"CSV record ending on line {line}: invalid date {value!r}"
         ) from exc
     return date
 
@@ -61,7 +84,8 @@ class PaginatedPriceData:
     """
 
     def __init__(
-        self, file_path: Union[str, os.PathLike], skip_lines: int = 2
+        self, file_path: Union[str, os.PathLike], skip_lines: int = 2,
+        require_named_columns: bool = False,
     ) -> None:
         if isinstance(skip_lines, bool) or not isinstance(skip_lines, int) or skip_lines < 0:
             raise ValueError("skip_lines must be a non-negative integer")
@@ -70,11 +94,23 @@ class PaginatedPriceData:
         with open(file_path, encoding="utf-8-sig", newline="") as file:
             reader = csv.reader(iter(file.readline, ""), strict=True)
             try:
-                for _ in range(skip_lines):
-                    if next(reader, None) is None:
+                columns = self._find_named_header(reader)
+                if columns is None:
+                    if require_named_columns:
                         raise ValueError(
-                            f"CSV must contain {skip_lines} header records to skip"
+                            "CSV header must name a date column (date or datetime) "
+                            "and open, high, low and close columns"
                         )
+                    file.seek(0)
+                    reader = csv.reader(iter(file.readline, ""), strict=True)
+                    for _ in range(skip_lines):
+                        if next(reader, None) is None:
+                            raise ValueError(
+                                f"CSV must contain {skip_lines} header records to skip"
+                            )
+                    columns = POSITIONAL_COLUMNS
+                self._date_column = columns["date"]
+                self._ohlc_columns = tuple(columns[name] for name in OHLC_COLUMN_NAMES)
                 previous: Optional[datetime] = None
                 while True:
                     offset = file.tell()
@@ -82,7 +118,7 @@ class PaginatedPriceData:
                     if row is None:
                         break
                     line = reader.line_num
-                    date = _parse_date(row, line)
+                    date = _parse_date(row, line, self._date_column)
                     if previous is not None and date >= previous:
                         raise ValueError(
                             f"CSV record ending on line {line}: dates must be strictly descending"
@@ -99,6 +135,18 @@ class PaginatedPriceData:
         self._cursor = 0
         self._interval = 0
         self._started = False
+
+    @staticmethod
+    def _find_named_header(reader: Any) -> Optional[Dict[str, int]]:
+        """Read the leading records and return the columns of the first one that names them."""
+        for _ in range(HEADER_SEARCH_RECORDS):
+            row = next(reader, None)
+            if row is None:
+                return None
+            columns = _named_columns(row)
+            if columns is not None:
+                return columns
+        return None
 
     @property
     def has_more(self) -> bool:
@@ -120,12 +168,12 @@ class PaginatedPriceData:
                     raise ValueError(f"Malformed CSV near indexed line {line}: {exc}") from exc
                 if row is None:
                     raise ValueError(f"CSV record at indexed line {line} is missing")
-                if _parse_date(row, line) != date:
+                if _parse_date(row, line, self._date_column) != date:
                     raise ValueError(f"CSV timestamp changed at indexed line {line}")
-                if len(row) < 7:
+                if len(row) <= max(self._ohlc_columns):
                     raise ValueError(f"CSV record ending on line {line}: missing OHLC values")
                 try:
-                    prices = [float(value) for value in row[3:7]]
+                    prices = [float(row[column]) for column in self._ohlc_columns]
                     if not all(isfinite(value) for value in prices):
                         raise ValueError("non-finite price")
                 except ValueError as exc:

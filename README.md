@@ -6,11 +6,17 @@ Run the visualizer from the repository root with:
 python3 main.py
 ```
 
-The application reads `data/data.csv` in CryptoDataDownload CSV format, with
-two header lines and newest records first. It initially displays the oldest
-year of available data. Use the **+3 months →** button at the bottom right to
-append the next three calendar months; the button is disabled when all data
-has been loaded. Missing dates do not create synthetic candles.
+The application starts with no data loaded. The chart is empty and a
+"No price data is loaded" message is shown. Use **File → Open Data File** to
+choose a CSV file of OHLC data. The file must have a header row (the first
+record that names the columns) with a `date` or `datetime` column and `open`,
+`high`, `low`, and `close` columns, matched case-insensitively in any order.
+Other columns are ignored. Dates must be in `YYYY-MM-DD HH:MM:SS` format and
+newest records first. The `data/data.csv` sample in CryptoDataDownload format
+is one example. Opening a file shows its oldest year of data. Use the
+**+3 months →** button at the bottom right to append the next three calendar
+months; the button is disabled when all data has been loaded. Missing dates do
+not create synthetic candles.
 
 Drag the chart to pan, use the scrollbars, or hold Ctrl and use the mouse wheel
 to zoom. Click a candle to show its date and open, high, low, and close values
@@ -46,11 +52,13 @@ as select mode. After you release the mouse, a prompt asks for a label for the
 selected candles. Each candle stores its open, high, low, close, RSI, the
 3-, 7-, 14-, and 30-candle simple moving averages, and the Bollinger middle, upper,
 and lower bands. Labeled selections are kept in
-memory until the program closes.
+memory until *Close Data File* or the program exits. Opening a new data file
+keeps them.
 The menu bar has four menus:
 
-- **File**: *Open Data File* and *Close Data File* are placeholders for now.
-  *About* shows the program name, version, and Python version. *Exit* closes the
+- **File**: *Open Data File* loads a CSV file as described above, replacing any
+  data already shown. *Close Data File* clears the candles, RSI, price labels,
+  dates, and all labeled selections. *About* shows the program name, version, and Python version. *Exit* closes the
   program.
 - **Indicators**: *Moving Averages* → *Simple* opens the simple moving average
   settings, and *Moving Averages* → *Exponential* opens an empty window for now.
@@ -68,6 +76,14 @@ stored in a `label` attribute on each group element, and the moving-average
 attributes are named `sma_3d`, `sma_7d`, `sma_2wk`, and `sma_1mo` because XML
 attribute names cannot start with a digit. The Bollinger values are stored as
 `bollinger_middle`, `bollinger_upper`, and `bollinger_lower`.
+
+Each candle also has four flags, written as `true`, `false`, or `null` (JSON) and
+`true`, `false`, or an empty attribute (XML). `null` means the flag cannot be
+determined yet, for example during the Bollinger warm-up or on the first candle for RSI:
+- `top_bol_intersect` / `btm_bol_intersect`: `true` when the candle's high-low range
+  contains the top or bottom Bollinger band value (`low <= band <= high`).
+- `rsi_ob` / `rsi_os`: `true` when RSI moves from one side of 70 (overbought) or 30
+  (oversold) to the other on this candle, in either direction.
 
 In the Simple window each moving average has its own *Show* checkbox, line
 *Style* (Dotted, Dashed, or Solid), and *Color* (Red, Blue, Orange, Green, or

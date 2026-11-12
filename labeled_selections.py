@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional
 
 # Labeled selections map each label to its candle records, in the order they were added.
-Selections = Dict[str, List[Dict[str, Optional[float]]]]
+Selections = Dict[str, List[Dict[str, Any]]]
 
 EXPORT_DIRECTORY = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "data", "labeled_data"
@@ -18,7 +18,10 @@ EXPORT_DIRECTORY = os.path.join(
 CANDLE_FIELDS = (
     "open", "high", "low", "close", "rsi", "3d_sma", "7d_sma", "2wk_sma", "1mo_sma",
     "bollinger_middle", "bollinger_upper", "bollinger_lower",
+    "top_bol_intersect", "btm_bol_intersect", "rsi_os", "rsi_ob",
 )
+# Fields holding true/false (or None when they cannot be determined) instead of numbers.
+BOOLEAN_FIELDS = ("top_bol_intersect", "btm_bol_intersect", "rsi_os", "rsi_ob")
 # Moving average period (in candles) for each moving average field.
 MOVING_AVERAGE_FIELDS = {3: "3d_sma", 7: "7d_sma", 14: "2wk_sma", 30: "1mo_sma"}
 # XML attribute names cannot start with a digit, so the moving average fields are renamed.
@@ -61,7 +64,7 @@ def read_selections(path: str) -> Selections:
 
 
 def to_json_text(selections: Selections) -> str:
-    document: Dict[str, Dict[str, Dict[str, Optional[float]]]] = {}
+    document: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for label, records in selections.items():
         document[label] = {
             f"{label}_candle_{number}": {field: record.get(field) for field in CANDLE_FIELDS}
@@ -92,8 +95,7 @@ def to_xml_text(selections: Selections) -> str:
         group = ET.SubElement(root, tag, {"label": label})
         for number, record in enumerate(records):
             attributes = {
-                XML_ATTRIBUTE_NAMES.get(field, field):
-                    "" if record.get(field) is None else str(record[field])
+                XML_ATTRIBUTE_NAMES.get(field, field): _xml_text(record.get(field))
                 for field in CANDLE_FIELDS
             }
             ET.SubElement(group, f"{tag}Candle{number}", attributes)
@@ -120,6 +122,14 @@ def from_xml_text(text: str) -> Selections:
     return selections
 
 
+def _xml_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
 def xml_tag(label: str) -> str:
     """Turn a label into a valid XML element name."""
     tag = re.sub(r"[^A-Za-z0-9_]", "_", label.strip())
@@ -128,17 +138,28 @@ def xml_tag(label: str) -> str:
     return tag
 
 
-def _record_from_mapping(mapping: Any) -> Dict[str, Optional[float]]:
+def _record_from_mapping(mapping: Any) -> Dict[str, Any]:
     if not isinstance(mapping, dict):
         raise ValueError("Each candle must be an object of values")
-    record: Dict[str, Optional[float]] = {}
+    record: Dict[str, Any] = {}
     for field in CANDLE_FIELDS:
         value = mapping.get(field)
         if value is None or value == "":
             record[field] = None
+        elif field in BOOLEAN_FIELDS:
+            record[field] = _boolean_from_value(field, value)
         else:
             try:
                 record[field] = float(value)
             except (TypeError, ValueError) as error:
                 raise ValueError(f"'{field}' must be a number, not {value!r}") from error
     return record
+
+
+def _boolean_from_value(field: str, value: Any) -> bool:
+    # JSON gives real booleans; XML gives the text "true" or "false".
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    raise ValueError(f"'{field}' must be true or false, not {value!r}")

@@ -86,10 +86,28 @@ class ExportModeTests(unittest.TestCase):
         expected_keys = {
             "open", "high", "low", "close", "rsi", "3d_sma", "7d_sma", "2wk_sma", "1mo_sma",
             "bollinger_middle", "bollinger_upper", "bollinger_lower",
+            "top_bol_intersect", "btm_bol_intersect", "rsi_os", "rsi_ob",
         }
         self.assertEqual(set(records[0]), expected_keys)
         self.assertEqual(records[0]["open"], self.viz.price_data[2][1])
         self.assertEqual(records[0]["close"], self.viz.price_data[2][4])
+
+    def test_saved_flags_match_band_and_rsi_rules(self) -> None:
+        index = 40
+        record = self.viz.labeled_candle_record(index)
+        _, upper, lower = self.viz.indicators_object.calculate_bollinger()
+        high, low = self.viz.price_data[index][2], self.viz.price_data[index][3]
+        self.assertEqual(record["top_bol_intersect"], low <= upper[index] <= high)
+        self.assertEqual(record["btm_bol_intersect"], low <= lower[index] <= high)
+        previous = self.viz.price_data[index - 1][5]["rsi"]
+        current = self.viz.price_data[index][5]["rsi"]
+        self.assertEqual(record["rsi_ob"], (previous - 70) * (current - 70) < 0)
+        self.assertEqual(record["rsi_os"], (previous - 30) * (current - 30) < 0)
+
+    def test_first_candle_has_no_rsi_cross(self) -> None:
+        record = self.viz.labeled_candle_record(0)
+        self.assertIsNone(record["rsi_ob"])
+        self.assertIsNone(record["rsi_os"])
 
     def test_saving_clears_the_selection(self) -> None:
         self.viz.set_selection({1, 2}, None)

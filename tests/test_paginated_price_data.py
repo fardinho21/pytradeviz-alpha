@@ -241,6 +241,54 @@ class PaginatedPriceDataTests(unittest.TestCase):
             actual.extend(dates(page))
         self.assertEqual(actual, expected)
 
+    def test_named_columns_are_found_case_insensitively_in_any_order(self) -> None:
+        text = (
+            "Source line\n"
+            "Volume,CLOSE,Symbol,Date,Low,OPEN,High,tradecount\n"
+            "10,2,asset,2024-01-02 00:00:00,0.5,1,3,7\n"
+            "20,1.5,asset,2024-01-01 00:00:00,0.25,0.75,2,8\n"
+        )
+        source = PaginatedPriceData(self.make_file(text), require_named_columns=True)
+        page = source.load_initial()
+        self.assertEqual(dates(page), ["2024-01-01", "2024-01-02"])
+        self.assertEqual(page[0][1:5], [0.75, 2.0, 0.25, 1.5])
+        self.assertEqual(page[1][1:5], [1.0, 3.0, 0.5, 2.0])
+
+    def test_datetime_column_name_is_accepted(self) -> None:
+        text = (
+            "datetime,open,high,low,close\n"
+            "2024-01-02 00:00:00,1,3,0.5,2\n"
+            "2024-01-01 00:00:00,1,3,0.5,2\n"
+        )
+        source = PaginatedPriceData(self.make_file(text), require_named_columns=True)
+        self.assertEqual(dates(source.load_initial()), ["2024-01-01", "2024-01-02"])
+
+    def test_named_header_after_leading_records_is_used(self) -> None:
+        text = (
+            "https://example.com\n"
+            "unix,date,open,high,low,close\n"
+            "0,2024-01-02 00:00:00,1,3,0.5,2\n"
+            "0,2024-01-01 00:00:00,4,6,3.5,5\n"
+        )
+        source = PaginatedPriceData(self.make_file(text), require_named_columns=True)
+        page = source.load_initial()
+        self.assertEqual(page[0][1:5], [4.0, 6.0, 3.5, 5.0])
+
+    def test_require_named_columns_rejects_unnamed_headers(self) -> None:
+        text = "a,b,c,d,e,f,g\n0,2024-01-01 00:00:00,x,1,3,0.5,2\n"
+        with self.assertRaisesRegex(ValueError, "must name a date column"):
+            PaginatedPriceData(self.make_file(text), require_named_columns=True)
+
+    def test_named_header_missing_one_ohlc_column_is_rejected_when_required(self) -> None:
+        text = "date,open,high,low\n2024-01-01 00:00:00,1,3,0.5\n"
+        with self.assertRaisesRegex(ValueError, "must name a date column"):
+            PaginatedPriceData(self.make_file(text), require_named_columns=True)
+
+    def test_positional_fallback_still_applies_without_named_header(self) -> None:
+        text = "a\nb\n" + "0,2024-01-01 00:00:00,x,1,3,0.5,2\n"
+        source = PaginatedPriceData(self.make_file(text))
+        self.assertEqual(dates(source.load_initial()), ["2024-01-01"])
+
 
 if __name__ == "__main__":
     unittest.main()

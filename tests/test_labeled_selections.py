@@ -24,6 +24,7 @@ def record(open_: float, sma_3d=None) -> dict:
         "open": open_, "high": open_ + 1, "low": open_ - 1, "close": open_ + 0.5,
         "rsi": 55.0, "3d_sma": sma_3d, "7d_sma": None, "2wk_sma": None, "1mo_sma": None,
         "bollinger_middle": open_, "bollinger_upper": open_ + 2.0, "bollinger_lower": open_ - 2.0,
+        "top_bol_intersect": True, "btm_bol_intersect": False, "rsi_os": None, "rsi_ob": False,
     }
 
 
@@ -76,6 +77,50 @@ class JsonRoundTripTests(unittest.TestCase):
     def test_non_numeric_value_raises_value_error(self) -> None:
         with self.assertRaises(ValueError):
             from_json_text('{"up": {"up_candle_0": {"open": "abc"}}}')
+
+
+class BooleanFieldTests(unittest.TestCase):
+    def test_json_writes_true_false_and_null(self) -> None:
+        text = to_json_text({"up": [record(1)]})
+        self.assertIn('"top_bol_intersect": true', text)
+        self.assertIn('"btm_bol_intersect": false', text)
+        self.assertIn('"rsi_os": null', text)
+
+    def test_json_round_trip_keeps_booleans(self) -> None:
+        selections = {"up": [record(1), record(2)]}
+        restored = from_json_text(to_json_text(selections))
+        self.assertIs(restored["up"][0]["top_bol_intersect"], True)
+        self.assertIs(restored["up"][0]["btm_bol_intersect"], False)
+        self.assertIsNone(restored["up"][0]["rsi_os"])
+        self.assertEqual(restored, selections)
+
+    def test_xml_writes_lowercase_true_false(self) -> None:
+        text = to_xml_text({"up": [record(1)]})
+        self.assertIn('top_bol_intersect="true"', text)
+        self.assertIn('btm_bol_intersect="false"', text)
+        self.assertIn('rsi_os=""', text)
+
+    def test_xml_round_trip_keeps_booleans(self) -> None:
+        selections = {"up": [record(1)]}
+        restored = from_xml_text(to_xml_text(selections))
+        self.assertIs(restored["up"][0]["top_bol_intersect"], True)
+        self.assertIs(restored["up"][0]["btm_bol_intersect"], False)
+        self.assertIsNone(restored["up"][0]["rsi_os"])
+        self.assertEqual(restored, selections)
+
+    def test_non_boolean_text_raises_value_error(self) -> None:
+        with self.assertRaises(ValueError):
+            from_json_text('{"up": {"up_candle_0": {"rsi_ob": "maybe"}}}')
+        with self.assertRaises(ValueError):
+            from_xml_text('<Selections><up label="up"><upCandle0 rsi_ob="yes"/></up></Selections>')
+
+    def test_files_without_flag_keys_still_load(self) -> None:
+        old = {"up": [{k: v for k, v in record(1).items() if k not in (
+            "top_bol_intersect", "btm_bol_intersect", "rsi_os", "rsi_ob")}]}
+        text = to_json_text(old)
+        restored = from_json_text(text)
+        self.assertIsNone(restored["up"][0]["rsi_ob"])
+        self.assertEqual(restored["up"][0]["open"], 1)
 
 
 class XmlRoundTripTests(unittest.TestCase):

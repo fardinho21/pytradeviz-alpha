@@ -17,6 +17,31 @@ HIGH_COLUMN = 2
 LOW_COLUMN = 3
 CLOSE_COLUMN = 4
 
+# RSI levels drawn on the indicator canvas and used for the overbought/oversold flags.
+RSI_OVERBOUGHT = 70
+RSI_OVERSOLD = 30
+
+
+def band_intersects(low: Optional[float], high: Optional[float], band: Optional[float]) -> Optional[bool]:
+    """Return True when the candle's high-low range contains the band value.
+
+    Returns None when the candle or the band has no value yet (warm-up rows).
+    """
+    if low is None or high is None or band is None:
+        return None
+    return low <= band <= high
+
+
+def rsi_crosses_level(previous: Optional[float], current: Optional[float], level: float) -> Optional[bool]:
+    """Return True when RSI moves from one side of ``level`` to the other on this candle.
+
+    Returns None when either RSI value is missing, e.g. for the first candle.
+    """
+    if previous is None or current is None:
+        return None
+    return (previous - level) * (current - level) < 0
+
+
 class Indicators:
 
     price_data: Optional[List[List[Any]]] = None

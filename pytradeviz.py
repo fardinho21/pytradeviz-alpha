@@ -11,11 +11,17 @@ from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
 from candle import Candle
 import datetime as datetime
 import math
-from indicators import Indicators, SMA_PERIODS, HIGH_COLUMN, LOW_COLUMN
+from indicators import (
+    Indicators, SMA_PERIODS, HIGH_COLUMN, LOW_COLUMN, RSI_OVERBOUGHT, RSI_OVERSOLD,
+    band_intersects, rsi_crosses_level,
+)
 from labeled_selections import (
     EXPORT_DIRECTORY, MOVING_AVERAGE_FIELDS, Selections, export_path, merge_selections,
     read_selections, write_selections,
 )
+from paginated_price_data import PaginatedPriceData
+
+DATA_DIRECTORY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 
 class PriceDataSource(Protocol):
@@ -182,6 +188,7 @@ class PyTradeViz:
         # set up canvas
         self.initialize_canvases(tk)
         self.initialize_candle_info(tk)
+        self.initialize_no_data_label(tk)
 
         # set up scrollbars
         self.initialize_scrollbars(ttk, tk)
@@ -215,6 +222,7 @@ class PyTradeViz:
         #event bind scrolling to mouse dragging
         self.event_bindings()
         self.center_vertical_view()
+        self.update_no_data_label()
 
         #set price data for indicators_objec 
 
@@ -243,12 +251,98 @@ class PyTradeViz:
         return file_menu
 
     def open_data_file(self) -> None:
-        # Placeholder until data file loading is implemented.
-        pass
+        path = filedialog.askopenfilename(
+            parent=self.window, title="Open Data File", initialdir=DATA_DIRECTORY,
+            filetypes=(("CSV files", "*.csv"), ("All files", "*.*")),
+        )
+        if not path:
+            return
+        try:
+            source = PaginatedPriceData(path, require_named_columns=True)
+            rows = source.load_initial()
+        except (csv.Error, OSError, ValueError) as error:
+            messagebox.showerror("Unable to open price data", str(error), parent=self.window)
+            return
+        self.replace_price_data(rows, source)
 
     def close_data_file(self) -> None:
-        # Placeholder until data file closing is implemented.
-        pass
+        self.labeled_selections.clear()
+        self.replace_price_data([], None)
+
+    def replace_price_data(
+        self, rows: List[List[Any]], data_source: Optional[PriceDataSource]
+    ) -> None:
+        """Show rows from the first candle, replacing what was on the chart. Empty rows clear it."""
+        self.reset_interaction_state()
+        for canvas in (self.canvas, self.canvas_price, self.canvas_date, self.canvas_indicators):
+            canvas.delete("all")
+        self._sma_items = []
+        self._bollinger_items = []
+
+        self.price_data_object = {"price_data": rows}
+        self.price_data = rows
+        self.data_source = data_source
+        self.indicators_object.set_price_data(rows)
+        self.indicators_object.calculate_RSI_incremental()
+
+        # Build at base size as startup does, then fit the chart to the current window.
+        self.zoom_level = 1.0
+        self.candle_height_scale = 1.0
+        self._scale_x = 1.0
+        self._scale_y = 1.0
+        self._last_canvas_width = self.canvas_width
+        self._last_canvas_height = self.canvas_height
+        self.chart_grid_space_y = self.base_chart_height
+        self.calculate_grid_space_x(self.price_data_object)
+        self._base_chart_width = self.chart_grid_space_x
+        self.calculate_price_range()
+
+        self.initialize_charts(rows)
+        self.render_candles()
+        self.render_dates()
+        self.render_indicators()
+        self.fit_chart_to_canvas(self.canvas.winfo_width(), self.canvas.winfo_height())
+        self.update_scroll_regions()
+        self.canvas.xview_moveto(0)
+        self.center_vertical_view()
+        self.update_load_more_button()
+        self.update_no_data_label()
+        self.draw_overlays()
+
+    def reset_interaction_state(self) -> None:
+        self.selection_mode = self.roi_mode = self.export_mode = False
+        self.selected_indices = set()
+        self._selection_box = None
+        self._box_origin = None
+        self._box_current = None
+        self._roi_span = None
+        self._press_position = None
+        self.roi_header = None
+        self.roi_results = None
+        self.crosshair_root = None
+        self.update_mode_widgets()
+        self.candle_info_label.place_forget()
+        self.roi_panel.place_forget()
+
+    def initialize_no_data_label(self, tk: ModuleType) -> None:
+        theme = self.get_theme()
+        self.no_data_label = tk.Label(
+            self.frame_canvas, text="No price data is loaded",
+            bg=theme["canvas"], fg=theme["ink"], padx=24, pady=12, relief="solid", bd=1,
+        )
+
+    def update_no_data_label(self) -> None:
+        if self.price_data:
+            self.no_data_label.place_forget()
+        else:
+            self.no_data_label.place(relx=0.5, rely=0.5, anchor="center")
+            self.no_data_label.lift()
+
+    def update_load_more_button(self) -> None:
+        if self.data_source is None or not self.data_source.has_more:
+            self.load_more_button.state(["disabled"])
+        else:
+            self.load_more_button.state(["!disabled"])
 
     def open_about_window(self, tk: ModuleType) -> None:
         window = self.open_modal_window(tk, "About PyTradeViz")
@@ -380,9 +474,9 @@ class PyTradeViz:
         self.labeled_selections.setdefault(label, []).extend(records)
         self.set_selection(set(), None)
 
-    def labeled_candle_record(self, index: int) -> Dict[str, Optional[float]]:
+    def labeled_candle_record(self, index: int) -> Dict[str, Any]:
         _, open_, high, low, close, indicators = self.price_data[index][:6]
-        record: Dict[str, Optional[float]] = {
+        record: Dict[str, Any] = {
             "open": open_, "high": high, "low": low, "close": close,
             "rsi": indicators["rsi"],
         }
@@ -392,6 +486,11 @@ class PyTradeViz:
         record["bollinger_middle"] = middle[index]
         record["bollinger_upper"] = upper[index]
         record["bollinger_lower"] = lower[index]
+        previous_rsi = self.price_data[index - 1][5]["rsi"] if index > 0 else None
+        record["top_bol_intersect"] = band_intersects(low, high, upper[index])
+        record["btm_bol_intersect"] = band_intersects(low, high, lower[index])
+        record["rsi_os"] = rsi_crosses_level(previous_rsi, record["rsi"], RSI_OVERSOLD)
+        record["rsi_ob"] = rsi_crosses_level(previous_rsi, record["rsi"], RSI_OVERBOUGHT)
         return record
 
     def initialize_indicators_menu(self, tk: ModuleType) -> Any:
@@ -541,20 +640,21 @@ class PyTradeViz:
                 tags=("horizontal_grid", "grid")
             )
             self.canvas_price.create_line(0, i, 100, i, dash=(5, 5), fill=grid, tags=("grid",))
-            #render price levels
-            plrender="{:.2f}".format(price_level)
-            self.canvas_price.create_text(
-                50, i, text=plrender, anchor="n" if i == 0 else "center",
-                fill=ink, tags=("price_label", "ink")
-            )
+            if self.price_data:
+                #render price levels
+                plrender="{:.2f}".format(price_level)
+                self.canvas_price.create_text(
+                    50, i, text=plrender, anchor="n" if i == 0 else "center",
+                    fill=ink, tags=("price_label", "ink")
+                )
             price_level-=self.incrementer
 
         self.canvas_indicators.create_line(
-            0, 70, self.chart_grid_space_x, 70, fill="orange", width=2,
+            0, RSI_OVERBOUGHT, self.chart_grid_space_x, RSI_OVERBOUGHT, fill="orange", width=2,
             tags=("indicator_level",)
         )
         self.canvas_indicators.create_line(
-            0, 30, self.chart_grid_space_x, 30, fill="blue", width=2,
+            0, RSI_OVERSOLD, self.chart_grid_space_x, RSI_OVERSOLD, fill="blue", width=2,
             tags=("indicator_level",)
         )
         
@@ -574,8 +674,7 @@ class PyTradeViz:
         self.load_more_button = ttk.Button(
             self.window, text=">", width=1, command=self.load_more_data
         )
-        if self.data_source is None or not self.data_source.has_more:
-            self.load_more_button.state(["disabled"])
+        self.update_load_more_button()
 
     def initialize_frames(self, ttk: ModuleType) -> None:
         self.frame_canvas = ttk.Frame(self.window, width=self.canvas_width, height=self.canvas_height)
@@ -671,6 +770,10 @@ class PyTradeViz:
 
     def calculate_price_range(self, new_rows: Optional[List[List[Any]]] = None) -> None:
         rows = self.price_data if new_rows is None else new_rows
+        if not rows:
+            self.price_upper = 1.60
+            self.price_lower = 0
+            return
         prices = [price for row in rows for price in row[1:5]]
         lowest = min(prices)
         highest = max(prices)
@@ -868,6 +971,7 @@ class PyTradeViz:
         self.restyle_candles()
         self.candle_info_label.configure(bg=theme["canvas"], fg=theme["ink"])
         self.select_mode_label.configure(bg=theme["canvas"], fg=theme["ink"])
+        self.no_data_label.configure(bg=theme["canvas"], fg=theme["ink"])
         self.render_roi_panel()
         self.dark_mode_button.configure(text="☀" if self.dark_mode else "☾")
         self.draw_overlays()
@@ -1477,8 +1581,9 @@ class PyTradeViz:
             canvas.bind("<Leave>", self.hide_crosshair)
 
     def resize_chart(self, event: tk.Event) -> None:
-        width = event.width
-        height = event.height
+        self.fit_chart_to_canvas(event.width, event.height)
+
+    def fit_chart_to_canvas(self, width: int, height: int) -> None:
         if width <= 1 or height <= 1:
             return
 
