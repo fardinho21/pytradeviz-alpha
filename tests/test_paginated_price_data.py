@@ -94,13 +94,9 @@ class PaginatedPriceDataTests(unittest.TestCase):
             source.load_initial()
 
     def test_validation_of_order_dates_headers_and_csv(self) -> None:
-        for records in (
-            [row("2020-01-01"), row("2021-01-01")],
-            [row("2020-01-01"), row("2020-01-01")],
-        ):
-            with self.subTest(records=records), self.assertRaisesRegex(ValueError, "descending"):
-                self.source_for(records)
-        for bad_date in ("2020-02-30", "2020-1-01", "not-a-date"):
+        with self.assertRaisesRegex(ValueError, "duplicate date"):
+            self.source_for([row("2020-01-01"), row("2020-01-01")])
+        for bad_date in ("2020-02-30", "not-a-date", "01/02/2020", "2020-01-01T25:00:00"):
             with self.subTest(date=bad_date), self.assertRaisesRegex(ValueError, "invalid date"):
                 self.source_for([row(bad_date)])
         for text, message in (
@@ -288,6 +284,54 @@ class PaginatedPriceDataTests(unittest.TestCase):
         text = "a\nb\n" + "0,2024-01-01 00:00:00,x,1,3,0.5,2\n"
         source = PaginatedPriceData(self.make_file(text))
         self.assertEqual(dates(source.load_initial()), ["2024-01-01"])
+
+
+    def test_ascending_and_descending_files_load_oldest_first(self) -> None:
+        ascending = self.source_for([row("2020-01-01"), row("2020-06-01")])
+        descending = self.source_for([row("2020-06-01"), row("2020-01-01")])
+        self.assertEqual(dates(ascending.load_initial()), ["2020-01-01", "2020-06-01"])
+        self.assertEqual(dates(descending.load_initial()), ["2020-01-01", "2020-06-01"])
+
+    def test_common_date_formats_are_accepted(self) -> None:
+        for date_text in (
+            "2020-01-02", "2020-01-02 10:30", "2020-01-02 10:30:00",
+            "2020-01-02T10:30:00", "2020/01/02", "2020/01/02 10:30:00", "2020-1-2",
+        ):
+            with self.subTest(date=date_text):
+                text = "date,open,high,low,close\n" + f"{date_text},1,3,0.5,2\n"
+                source = PaginatedPriceData(self.make_file(text), require_named_columns=True)
+                self.assertEqual(dates(source.load_initial()), ["2020-01-02"])
+
+    def test_date_only_and_time_rows_are_compared_by_timestamp(self) -> None:
+        text = (
+            "date,open,high,low,close\n"
+            "2020-01-02 09:00,1,3,0.5,2\n"
+            "2020-01-02 15:00,1,3,0.5,2\n"
+        )
+        source = PaginatedPriceData(self.make_file(text), require_named_columns=True)
+        self.assertEqual(len(source.load_initial()), 2)
+
+    def test_dollar_prefixed_prices_are_accepted(self) -> None:
+        text = (
+            "Date,Volume,Open,High,Low,Close\n"
+            "2020-01-02,10,$38.58,$39.39,$38.55,$39.25\n"
+        )
+        source = PaginatedPriceData(self.make_file(text), require_named_columns=True)
+        self.assertEqual(source.load_initial()[0][1:5], [38.58, 39.39, 38.55, 39.25])
+
+    def test_real_ascending_dollar_samples_page_completely(self) -> None:
+        root = Path(__file__).resolve().parent.parent / "data"
+        for name in ("AMZN_10_year_OHLC.csv", "APPL_10_year_OHLC.csv"):
+            with self.subTest(file=name):
+                source = PaginatedPriceData(root / name, require_named_columns=True)
+                actual = dates(source.load_initial())
+                while source.has_more:
+                    page = source.load_next()
+                    self.assertTrue(page)
+                    actual.extend(dates(page))
+                self.assertEqual(actual[0], "2016-11-07")
+                self.assertEqual(actual, sorted(actual))
+                self.assertEqual(len(actual), len(set(actual)))
 
 
 if __name__ == "__main__":

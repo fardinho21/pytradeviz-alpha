@@ -11,9 +11,12 @@ The application starts with no data loaded. The chart is empty and a
 choose a CSV file of OHLC data. The file must have a header row (the first
 record that names the columns) with a `date` or `datetime` column and `open`,
 `high`, `low`, and `close` columns, matched case-insensitively in any order.
-Other columns are ignored. Dates must be in `YYYY-MM-DD HH:MM:SS` format and
-newest records first. The `data/data.csv` sample in CryptoDataDownload format
-is one example. Opening a file shows its oldest year of data. Use the
+Other columns are ignored. Dates may be written as `YYYY-MM-DD`,
+`YYYY-MM-DD HH:MM[:SS]` (with a space or `T` between date and time), or
+`YYYY/MM/DD`. Rows may be in either oldest-first or newest-first order, but
+each timestamp must be unique. OHLC values may have a leading `$`. Ambiguous
+formats such as `MM/DD/YYYY` are not accepted. The `data/data.csv` sample
+(CryptoDataDownload format) and `data/AMZN_10_year_OHLC.csv` are examples. Opening a file shows its oldest year of data. Use the
 **+3 months →** button at the bottom right to append the next three calendar
 months; the button is disabled when all data has been loaded. Missing dates do
 not create synthetic candles.

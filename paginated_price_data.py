@@ -1,12 +1,13 @@
-"""Chronological, calendar-based pagination of descending price CSV files.
+"""Chronological, calendar-based pagination of price CSV files.
 
 The header row is located by name: a record that names a date column (``date``
 or ``datetime``) and ``open``, ``high``, ``low`` and ``close``, matched without
-regard to case. Other columns are ignored. Records follow the header in strictly
-descending timestamp order, and dates use ``YYYY-MM-DD HH:MM:SS``. When no
-header names the columns, the file is read by position instead: the first
-``skip_lines`` records are skipped, the date is in column 1 and OHLC values are
-in columns 3 through 6. Timestamps and record offsets, including those of
+regard to case. Other columns are ignored. Records may be in ascending or
+descending order and must not repeat a timestamp. Dates may be written as
+``YYYY-MM-DD``, ``YYYY-MM-DD HH:MM[:SS]`` (with a space or ``T`` separator) or
+``YYYY/MM/DD``. OHLC values may carry a leading ``$``. When no header names the
+columns, the file is read by position instead: the first ``skip_lines`` records
+are skipped, the date is in column 1 and OHLC values are in columns 3 through 6. Timestamps and record offsets, including those of
 quoted multiline records, are indexed at construction; rows are reread and
 OHLC values converted only when a page is requested.
 
@@ -29,6 +30,10 @@ from math import isfinite
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 DATE_COLUMN_NAMES = ("date", "datetime")
+DATE_FORMATS = (
+    "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M",
+    "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d",
+)
 OHLC_COLUMN_NAMES = ("open", "high", "low", "close")
 # Positional layout used when no header record names the columns.
 POSITIONAL_COLUMNS: Dict[str, int] = {"date": 1, "open": 3, "high": 4, "low": 5, "close": 6}
@@ -61,16 +66,18 @@ def _add_months(anchor: datetime, months: int) -> Optional[datetime]:
 def _parse_date(row: List[str], line: int, column: int = 1) -> datetime:
     if len(row) <= column:
         raise ValueError(f"CSV record ending on line {line}: missing date")
-    value = row[column]
-    try:
-        date = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
-        if date.isoformat(sep=" ") != value:
-            raise ValueError
-    except ValueError as exc:
-        raise ValueError(
-            f"CSV record ending on line {line}: invalid date {value!r}"
-        ) from exc
-    return date
+    value = row[column].strip()
+    for date_format in DATE_FORMATS:
+        try:
+            return datetime.strptime(value, date_format)
+        except ValueError:
+            continue
+    raise ValueError(f"CSV record ending on line {line}: invalid date {row[column]!r}")
+
+
+def _parse_price(text: str) -> float:
+    """Convert an OHLC field to float, accepting a leading dollar sign."""
+    return float(text.strip().replace("$", ""))
 
 
 class PaginatedPriceData:
@@ -78,8 +85,8 @@ class PaginatedPriceData:
 
     All boundaries are exclusive and calculated from the oldest timestamp,
     avoiding drift after short months. Empty windows are skipped by load_next.
-    Duplicate timestamps, out-of-order timestamps and malformed CSV dates
-    raise ValueError during indexing. Malformed OHLC values raise ValueError
+    Duplicate timestamps and malformed CSV dates raise ValueError during
+    indexing. Malformed OHLC values raise ValueError
     when their page is loaded; filesystem errors propagate unchanged.
     """
 
@@ -111,7 +118,6 @@ class PaginatedPriceData:
                     columns = POSITIONAL_COLUMNS
                 self._date_column = columns["date"]
                 self._ohlc_columns = tuple(columns[name] for name in OHLC_COLUMN_NAMES)
-                previous: Optional[datetime] = None
                 while True:
                     offset = file.tell()
                     row = next(reader, None)
@@ -119,18 +125,20 @@ class PaginatedPriceData:
                         break
                     line = reader.line_num
                     date = _parse_date(row, line, self._date_column)
-                    if previous is not None and date >= previous:
-                        raise ValueError(
-                            f"CSV record ending on line {line}: dates must be strictly descending"
-                        )
                     records.append((date, offset, line))
-                    previous = date
             except csv.Error as exc:
                 raise ValueError(f"Malformed CSV near line {reader.line_num}: {exc}") from exc
 
         if not records:
             raise ValueError("CSV contains no price records")
-        self._records = records[::-1]
+        records.sort(key=lambda record: record[0])
+        for earlier, later in zip(records, records[1:]):
+            if earlier[0] == later[0]:
+                raise ValueError(
+                    f"CSV record ending on line {later[2]}: duplicate date "
+                    f"{later[0].strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+        self._records = records
         self._dates = [record[0] for record in self._records]
         self._cursor = 0
         self._interval = 0
@@ -173,7 +181,7 @@ class PaginatedPriceData:
                 if len(row) <= max(self._ohlc_columns):
                     raise ValueError(f"CSV record ending on line {line}: missing OHLC values")
                 try:
-                    prices = [float(row[column]) for column in self._ohlc_columns]
+                    prices = [_parse_price(row[column]) for column in self._ohlc_columns]
                     if not all(isfinite(value) for value in prices):
                         raise ValueError("non-finite price")
                 except ValueError as exc:

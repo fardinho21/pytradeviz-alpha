@@ -58,6 +58,18 @@ class DataFileWorkflowTests(unittest.TestCase):
         self.assertTrue(viz.no_data_label.winfo_ismapped())
         self.assertIn("disabled", viz.load_more_button.state())
 
+    def test_ascending_dollar_csv_with_plain_dates_opens(self) -> None:
+        lines = ["Date,Volume,Open,High,Low,Close"]
+        start = datetime.date(2020, 1, 1)
+        for offset in range(30):
+            date = start + datetime.timedelta(days=offset)
+            lines.append(f"{date.isoformat()},10,$1.0,$2.0,$0.5,$1.5")
+        viz = self.make_viz()
+        self.open_file(viz, self.make_file("\n".join(lines) + "\n"))
+        self.assertEqual(len(viz.price_data), 30)
+        self.assertEqual(viz.price_data[0][0], ["2020", "01", "01"])
+        self.assertFalse(viz.no_data_label.winfo_ismapped())
+
     def test_opening_a_file_loads_candles_and_hides_popup(self) -> None:
         viz = self.make_viz()
         path = self.make_file(csv_text(30))
