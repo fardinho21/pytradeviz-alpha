@@ -55,6 +55,10 @@ class Source:
     def load_next(self) -> List[List[Any]]:
         return self.pages.pop(0)
 
+    @property
+    def ticker(self) -> None:
+        return None
+
 
 class IncrementalIndicatorTests(unittest.TestCase):
     def test_incremental_rsi_matches_full_calculation(self) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import io
 import os
+import re
 import sys
 import tkinter as tk
 import unittest
@@ -72,7 +73,13 @@ class LevelsWindowTests(unittest.TestCase):
         return list(self.viz.canvas.coords(item))
 
     def level_items(self, label: str) -> List[int]:
-        return list(self.viz.canvas.find_withtag(f"levels_{label}"))
+        """Markers and lines for a window; odds labels are listed by odds_labels."""
+        return [item for item in self.viz.canvas.find_withtag(f"levels_{label}")
+                if self.viz.canvas.type(item) != "text"]
+
+    def odds_labels(self, label: str) -> List[int]:
+        return [item for item in self.viz.canvas.find_withtag(f"levels_{label}")
+                if self.viz.canvas.type(item) == "text"]
 
     def apply(self, window: tk.Misc) -> None:
         self.find_button(window, "Apply").invoke()
@@ -230,7 +237,7 @@ class LevelsWindowTests(unittest.TestCase):
         self.choose(window, "Static (latest levels across the whole chart)")
         self.show_window(window, "6M", "Red")
         self.apply(window)
-        finder, _ = self.viz.levels_for_chart()
+        finder, _, _ = self.viz.levels_for_chart()
         first, last = self.viz.visible_candle_range()
         self.assertEqual(
             len(self.level_items("6M")),
@@ -273,6 +280,37 @@ class LevelsWindowTests(unittest.TestCase):
         self.assertEqual((settings.pivot_bars, settings.width_pct, settings.min_touches),
                          (3, 0.5, 4))
 
+    def test_breakout_switches_are_stored_on_apply(self) -> None:
+        window = self.open_levels_window()
+        group = next(g for g in self.descendants(window, tk.LabelFrame)
+                     if g.cget("text") == "Breakout odds")
+        self.choose(group, "5 candles")
+        self.choose(group, "2%")
+        self.apply(window)
+        self.assertEqual(self.viz.levels_applied["horizon"], 5)
+        self.assertEqual(self.viz.levels_applied["rejection"], "2%")
+
+    def test_odds_labels_show_probability_or_sample_size(self) -> None:
+        window = self.open_levels_window()
+        self.show_window(window, "6M", "Red")
+        self.apply(window)
+        color = self.viz.sma_colors["Red"]
+        labels = self.odds_labels("6M")
+        self.assertTrue(labels)
+        for label in labels:
+            self.assertEqual(self.viz.canvas.itemcget(label, "fill"), color)
+        texts = [self.viz.canvas.itemcget(label, "text") for label in labels]
+        pattern = re.compile(r"^(n/a|n=\d+ \(too few\)|\d+% n=\d+)$")
+        for text in texts:
+            self.assertRegex(text, pattern)
+
+    def test_overlapping_odds_labels_are_dropped(self) -> None:
+        occupied: list = []
+        self.viz.draw_level_odds(5, 0.7, "red", "6M", "33% n=57", occupied)
+        self.viz.draw_level_odds(5, 0.7, "red", "3M", "41% n=12", occupied)
+        self.assertEqual(len(self.odds_labels("6M")), 1)
+        self.assertEqual(self.odds_labels("3M"), [])
+
     def test_replacing_the_data_clears_the_levels(self) -> None:
         window = self.open_levels_window()
         self.show_window(window, "6M", "Red")
@@ -283,6 +321,39 @@ class LevelsWindowTests(unittest.TestCase):
         self.viz.window.update()
         self.assertFalse(set(stale) & set(self.viz.canvas.find_all()))
         self.assertEqual(self.viz._levels_cache[0][0], 200)
+
+
+    def open_help_window(self, window: tk.Toplevel) -> tk.Toplevel:
+        self.find_button(window, "Help").invoke()
+        self.viz.window.update()
+        (help_window,) = [w for w in window.winfo_children()
+                          if isinstance(w, tk.Toplevel) and w.title() == "Support and Resistance Help"]
+        self.addCleanup(lambda: help_window.destroy() if help_window.winfo_exists() else None)
+        return help_window
+
+    def test_help_button_opens_the_help_modal(self) -> None:
+        window = self.open_levels_window()
+        help_window = self.open_help_window(window)
+        self.assertTrue(help_window.winfo_viewable())
+        self.assertIs(help_window.master, window)
+
+    def test_help_text_describes_every_setting(self) -> None:
+        window = self.open_levels_window()
+        help_window = self.open_help_window(window)
+        (text_widget,) = self.descendants(help_window, tk.Text)
+        content = text_widget.get("1.0", "end")
+        for term in ("Pivot bars", "Cluster width", "Min touches", "Causal", "Static",
+                     "Triangles", "Lines", "Wavy", "Show", "Color", "2W", "6M",
+                     "Horizon", "Rejection", "1 ATR", "2%", "too few", "Apply"):
+            self.assertIn(term, content)
+
+    def test_closing_help_returns_the_grab_to_the_levels_window(self) -> None:
+        window = self.open_levels_window()
+        help_window = self.open_help_window(window)
+        self.find_button(help_window, "Close").invoke()
+        self.viz.window.update()
+        self.assertFalse(help_window.winfo_exists())
+        self.assertEqual(str(window.grab_current()), str(window))
 
 
 if __name__ == "__main__":

@@ -47,17 +47,34 @@ class Level:
 
 @dataclass(frozen=True)
 class Segment:
-    """A level drawn from candle ``start`` to candle ``end`` inclusive, at a fixed price."""
+    """A level drawn from candle ``start`` to candle ``end`` inclusive, at a fixed price.
+
+    ``origin`` is the candle where the level first qualified and ``touches`` is the
+    number of pivots behind it then. Those describe the level's identity, while
+    ``start`` only marks where this run of drawing begins.
+    """
     start: int
     end: int
     price: float
     kind: str
+    origin: int = -1
+    touches: int = 0
 
 
 @dataclass(frozen=True)
 class Pivot:
     index: int
     price: float
+
+
+@dataclass
+class Track:
+    """One level followed from the candle it first qualifies until it breaks or lapses."""
+    start: int
+    end: int
+    price: float
+    kind: str
+    touches: int
 
 
 def shift_months(day: dt.date, months: int) -> dt.date:
@@ -128,13 +145,6 @@ def nearest_per_side(levels: Sequence[Level], close: float) -> List[Level]:
 
 
 @dataclass
-class _Track:
-    start: int
-    end: int
-    price: float
-    kind: str
-
-
 class LevelFinder:
     """Precomputes pivots once so levels can be queried for any candle cheaply."""
 
@@ -181,7 +191,7 @@ class LevelFinder:
         is drawn on every candle where it is one of the nearest two on its side,
         so a level does not flicker off and back on as price moves.
         """
-        tracks = self._tracks(label)
+        tracks = self.tracks(label)
         shown: List[set] = [set() for _ in range(self.count)]
         for index in range(self.count):
             close = self._closes[index]
@@ -205,25 +215,29 @@ class LevelFinder:
                         run_start = index
                     continue
                 if run_start is not None:
-                    segments.append(Segment(run_start, index - 1, track.price, track.kind))
+                    segments.append(Segment(
+                        run_start, index - 1, track.price, track.kind,
+                        track.start, track.touches))
                     run_start = None
             if run_start is not None:
-                segments.append(Segment(run_start, track.end, track.price, track.kind))
+                segments.append(Segment(
+                    run_start, track.end, track.price, track.kind,
+                    track.start, track.touches))
         return sorted(segments, key=lambda segment: (segment.start, segment.price))
 
-    def _tracks(self, label: str) -> List["_Track"]:
+    def tracks(self, label: str) -> List[Track]:
         """Follow each candidate level from its first candle until it is broken or lapses."""
         if self.count == 0:
             return []
         tolerance = self.settings.width_pct / 100
-        finished: List[_Track] = []
-        active: List[_Track] = []
+        finished: List[Track] = []
+        active: List[Track] = []
         for index in range(self.count):
             close = self._closes[index]
             unmatched = self.candidates_at(index, label)
-            survivors: List[_Track] = []
+            survivors: List[Track] = []
             for track in active:
-                if _is_broken(track, close, tolerance):
+                if is_broken(track.kind, track.price, close, tolerance):
                     track.end = index - 1
                     finished.append(track)
                     continue
@@ -235,7 +249,7 @@ class LevelFinder:
                     unmatched.remove(match)
                     survivors.append(track)
             for level in unmatched:
-                survivors.append(_Track(index, index, level.price, level.kind))
+                survivors.append(Track(index, index, level.price, level.kind, level.touches))
             active = survivors
         for track in active:
             track.end = self.count - 1
@@ -250,15 +264,15 @@ class LevelFinder:
         return first, max(first, last)
 
 
-def _is_broken(track: _Track, close: float, tolerance: float) -> bool:
+def is_broken(kind: str, price: float, close: float, tolerance: float) -> bool:
     """A level is a zone ``tolerance`` wide, so breaking it takes a close beyond the zone."""
-    band = tolerance * track.price
-    if track.kind == SUPPORT:
-        return close < track.price - band
-    return close > track.price + band
+    band = tolerance * price
+    if kind == SUPPORT:
+        return close < price - band
+    return close > price + band
 
 
-def _closest_match(track: _Track, levels: List[Level], tolerance: float) -> Level | None:
+def _closest_match(track: Track, levels: List[Level], tolerance: float) -> Level | None:
     best: Level | None = None
     best_distance = tolerance * track.price
     for level in levels:

@@ -2,7 +2,8 @@
 
 The header row is located by name: a record that names a date column (``date``
 or ``datetime``) and ``open``, ``high``, ``low`` and ``close``, matched without
-regard to case. Other columns are ignored. Records may be in ascending or
+regard to case. The asset ticker is the first value of a ``symbol`` column, or else
+a lone record above the header that is not a URL. Other columns are ignored. Records may be in ascending or
 descending order and must not repeat a timestamp. Dates may be written as
 ``YYYY-MM-DD``, ``YYYY-MM-DD HH:MM[:SS]`` (with a space or ``T`` separator) or
 ``YYYY/MM/DD``. OHLC values may carry a leading ``$``. When no header names the
@@ -50,7 +51,18 @@ def _named_columns(row: List[str]) -> Optional[Dict[str, int]]:
         return None
     columns = {"date": positions[date_name]}
     columns.update({name: positions[name] for name in OHLC_COLUMN_NAMES})
+    if "symbol" in positions:
+        columns["symbol"] = positions["symbol"]
     return columns
+
+
+def _ticker_from_leading(rows: List[List[str]]) -> Optional[str]:
+    """Return the first record above the header that holds a single value, unless it is a URL."""
+    for row in rows:
+        fields = [field.strip() for field in row if field.strip()]
+        if len(fields) == 1 and "://" not in fields[0]:
+            return fields[0]
+    return None
 
 
 def _add_months(anchor: datetime, months: int) -> Optional[datetime]:
@@ -101,7 +113,7 @@ class PaginatedPriceData:
         with open(file_path, encoding="utf-8-sig", newline="") as file:
             reader = csv.reader(iter(file.readline, ""), strict=True)
             try:
-                columns = self._find_named_header(reader)
+                columns, leading = self._find_named_header(reader)
                 if columns is None:
                     if require_named_columns:
                         raise ValueError(
@@ -116,8 +128,11 @@ class PaginatedPriceData:
                                 f"CSV must contain {skip_lines} header records to skip"
                             )
                     columns = POSITIONAL_COLUMNS
+                    leading = []
                 self._date_column = columns["date"]
                 self._ohlc_columns = tuple(columns[name] for name in OHLC_COLUMN_NAMES)
+                symbol_column = columns.get("symbol")
+                symbol: Optional[str] = None
                 while True:
                     offset = file.tell()
                     row = next(reader, None)
@@ -126,11 +141,14 @@ class PaginatedPriceData:
                     line = reader.line_num
                     date = _parse_date(row, line, self._date_column)
                     records.append((date, offset, line))
+                    if symbol is None and symbol_column is not None and len(row) > symbol_column:
+                        symbol = row[symbol_column].strip() or None
             except csv.Error as exc:
                 raise ValueError(f"Malformed CSV near line {reader.line_num}: {exc}") from exc
 
         if not records:
             raise ValueError("CSV contains no price records")
+        self._ticker = symbol or _ticker_from_leading(leading)
         records.sort(key=lambda record: record[0])
         for earlier, later in zip(records, records[1:]):
             if earlier[0] == later[0]:
@@ -144,17 +162,26 @@ class PaginatedPriceData:
         self._interval = 0
         self._started = False
 
+    @property
+    def ticker(self) -> Optional[str]:
+        """The asset ticker named by the file, or None when the file names none."""
+        return self._ticker
+
     @staticmethod
-    def _find_named_header(reader: Any) -> Optional[Dict[str, int]]:
-        """Read the leading records and return the columns of the first one that names them."""
+    def _find_named_header(
+        reader: Any,
+    ) -> Tuple[Optional[Dict[str, int]], List[List[str]]]:
+        """Return the columns of the first record that names them, and the records before it."""
+        leading: List[List[str]] = []
         for _ in range(HEADER_SEARCH_RECORDS):
             row = next(reader, None)
             if row is None:
-                return None
+                break
             columns = _named_columns(row)
             if columns is not None:
-                return columns
-        return None
+                return columns, leading
+            leading.append(row)
+        return None, leading
 
     @property
     def has_more(self) -> bool:

@@ -237,6 +237,49 @@ class PaginatedPriceDataTests(unittest.TestCase):
             actual.extend(dates(page))
         self.assertEqual(actual, expected)
 
+    def test_ticker_comes_from_the_symbol_column(self) -> None:
+        text = (
+            "Date,Symbol,Open,High,Low,Close\n"
+            "2024-01-01,XRP/USDT,1,3,0.5,2\n"
+            "2024-01-02,XRP/USDT,1,3,0.5,2\n"
+        )
+        self.assertEqual(PaginatedPriceData(self.make_file(text), require_named_columns=True).ticker,
+                         "XRP/USDT")
+
+    def test_ticker_comes_from_a_lone_record_above_the_header(self) -> None:
+        text = (
+            "AMZN\n"
+            "Date,Volume,Open,High,Low,Close\n"
+            "2024-01-01,10,$1,$3,$0.5,$2\n"
+        )
+        self.assertEqual(PaginatedPriceData(self.make_file(text), require_named_columns=True).ticker,
+                         "AMZN")
+
+    def test_symbol_column_takes_priority_over_a_lone_record(self) -> None:
+        text = (
+            "AMZN\n"
+            "Date,Symbol,Open,High,Low,Close\n"
+            "2024-01-01,XRP/USDT,1,3,0.5,2\n"
+        )
+        self.assertEqual(PaginatedPriceData(self.make_file(text), require_named_columns=True).ticker,
+                         "XRP/USDT")
+
+    def test_source_url_above_the_header_is_not_a_ticker(self) -> None:
+        text = (
+            "https://www.example.com\n"
+            "Date,Open,High,Low,Close\n"
+            "2024-01-01,1,3,0.5,2\n"
+        )
+        self.assertIsNone(PaginatedPriceData(self.make_file(text), require_named_columns=True).ticker)
+
+    def test_ticker_is_none_when_the_file_names_none(self) -> None:
+        text = "Date,Open,High,Low,Close\n2024-01-01,1,3,0.5,2\n"
+        self.assertIsNone(PaginatedPriceData(self.make_file(text), require_named_columns=True).ticker)
+
+    def test_positional_fallback_has_no_ticker(self) -> None:
+        text = "Source line\nAMZN\n0,2024-01-01 00:00:00,asset,1,3,0.5,2\n"
+        self.assertIsNone(PaginatedPriceData(self.make_file(text)).ticker)
+
     def test_named_columns_are_found_case_insensitively_in_any_order(self) -> None:
         text = (
             "Source line\n"

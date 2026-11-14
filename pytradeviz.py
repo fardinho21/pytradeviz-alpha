@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from tkinter import font as tkfont
 import csv
 import itertools
 import os
@@ -15,6 +16,10 @@ from indicators import (
     Indicators, SMA_PERIODS, HIGH_COLUMN, LOW_COLUMN, RSI_OVERBOUGHT, RSI_OVERSOLD,
     band_intersects, rsi_crosses_level,
 )
+from breakout import (
+    ATR_REJECTION, HORIZONS, REJECTION_RULES, BreakoutStudy, Odds,
+)
+from levels_help import LEVELS_HELP
 from levels import (
     RESISTANCE, SUPPORT, WINDOW_LOOKBACKS, LevelFinder, LevelSettings, Segment,
 )
@@ -27,9 +32,21 @@ from paginated_price_data import PaginatedPriceData
 DATA_DIRECTORY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 
+def odds_text(odds: Optional[Odds]) -> str:
+    """Short breakout odds, such as ``38% n=24``, or ``n=4 (too few)`` below the sample minimum."""
+    if odds is None:
+        return "n/a"
+    if not odds.reliable:
+        return f"n={odds.samples} (too few)"
+    return f"{odds.probability:.0%} n={odds.samples}"
+
+
 class PriceDataSource(Protocol):
     @property
     def has_more(self) -> bool: ...
+
+    @property
+    def ticker(self) -> Optional[str]: ...
 
     def load_next(self) -> List[List[Any]]: ...
 
@@ -128,6 +145,7 @@ class PyTradeViz:
     _data_lowest: float
     _data_highest: float
     candle_info_label: tk.Label
+    ticker_label: tk.Label
     _press_position: Optional[Tuple[int, int]] = None
     click_drag_threshold: int = 5
     selection_mode: bool = False
@@ -192,6 +210,8 @@ class PyTradeViz:
         self.levels_applied: Dict[str, Any] = {
             "mode": "Causal",
             "settings": LevelSettings(),
+            "horizon": HORIZONS[-1],
+            "rejection": ATR_REJECTION,
             "windows": {
                 label: {
                     "enabled": False,
@@ -202,10 +222,12 @@ class PyTradeViz:
             },
         }
         self._levels_items: List[int] = []
-        # Finder and per-window segments, rebuilt when the rows or level settings change.
-        self._levels_cache: Optional[
-            Tuple[Tuple[int, LevelSettings], LevelFinder, Dict[str, List[Segment]]]
-        ] = None
+        # Finder, per-window segments and breakout studies, rebuilt when the rows or
+        # level settings change. Studies are keyed by (window, horizon, rejection).
+        self._levels_cache: Optional[Tuple[
+            Tuple[int, LevelSettings], LevelFinder, Dict[str, List[Segment]],
+            Dict[Tuple[str, int, str], BreakoutStudy],
+        ]] = None
 
         self.calculate_grid_space_x(price_data_object)
         self._base_chart_width = self.chart_grid_space_x
@@ -222,6 +244,7 @@ class PyTradeViz:
         self.initialize_canvases(tk)
         self.initialize_candle_info(tk)
         self.initialize_no_data_label(tk)
+        self.initialize_ticker_label(tk)
 
         # set up scrollbars
         self.initialize_scrollbars(ttk, tk)
@@ -256,6 +279,7 @@ class PyTradeViz:
         self.event_bindings()
         self.center_vertical_view()
         self.update_no_data_label()
+        self.update_ticker_label()
 
         #set price data for indicators_objec 
 
@@ -342,6 +366,7 @@ class PyTradeViz:
         self.center_vertical_view()
         self.update_load_more_button()
         self.update_no_data_label()
+        self.update_ticker_label()
         self.draw_overlays()
 
     def reset_interaction_state(self) -> None:
@@ -372,6 +397,24 @@ class PyTradeViz:
         else:
             self.no_data_label.place(relx=0.5, rely=0.5, anchor="center")
             self.no_data_label.lift()
+
+    def initialize_ticker_label(self, tk: ModuleType) -> None:
+        theme = self.get_theme()
+        self.ticker_label = tk.Label(
+            self.frame_canvas, bg=theme["canvas"], fg=theme["ink"], padx=8, pady=4,
+        )
+
+    def update_ticker_label(self) -> None:
+        """Show the ticker and the close of the last candle loaded, at the top left."""
+        if not self.price_data:
+            self.ticker_label.place_forget()
+            return
+        ticker = self.data_source.ticker if self.data_source is not None else None
+        parts = [ticker] if ticker else []
+        parts.append(f"{self.price_data[-1][4]:.8g}")
+        self.ticker_label.configure(text="  ".join(parts))
+        self.ticker_label.place(x=0, y=0, anchor="nw")
+        self.ticker_label.lift()
 
     def update_load_more_button(self) -> None:
         if self.data_source is None or not self.data_source.has_more:
@@ -608,6 +651,8 @@ class PyTradeViz:
         settings = applied["settings"]
         staged: Dict[str, Any] = {
             "mode": tk.StringVar(window, value=applied["mode"]),
+            "horizon": tk.StringVar(window, value=str(applied["horizon"])),
+            "rejection": tk.StringVar(window, value=applied["rejection"]),
             "settings": {
                 "pivot_bars": tk.StringVar(window, value=str(settings.pivot_bars)),
                 "width_pct": tk.StringVar(window, value=f"{settings.width_pct:g}"),
@@ -648,6 +693,17 @@ class PyTradeViz:
             tk.Entry(detection, textvariable=staged["settings"][key], width=8).grid(
                 row=row, column=1, sticky="w", padx=(8, 0))
 
+        odds_group = tk.LabelFrame(window, text="Breakout odds", padx=10, pady=6)
+        odds_group.pack(fill="x", padx=12, pady=(12, 0))
+        tk.Label(odds_group, text="Horizon:").grid(row=0, column=0, sticky="w")
+        for column, horizon in enumerate(HORIZONS, start=1):
+            tk.Radiobutton(odds_group, text=f"{horizon} candles", value=str(horizon),
+                           variable=staged["horizon"]).grid(row=0, column=column, sticky="w")
+        tk.Label(odds_group, text="Rejection:").grid(row=1, column=0, sticky="w")
+        for column, rule in enumerate(REJECTION_RULES, start=1):
+            tk.Radiobutton(odds_group, text=rule, value=rule,
+                           variable=staged["rejection"]).grid(row=1, column=column, sticky="w")
+
         for label in WINDOW_LOOKBACKS:
             variables = staged["windows"][label]
             group = tk.LabelFrame(window, text=f"{label} window (max 2 support, 2 resistance)",
@@ -668,6 +724,8 @@ class PyTradeViz:
 
         buttons = tk.Frame(window)
         buttons.pack(fill="x", padx=12, pady=12)
+        tk.Button(buttons, text="Help", width=8,
+                  command=lambda: self.open_levels_help(tk, window)).pack(side="left")
         tk.Button(buttons, text="Close", width=8, command=window.destroy).pack(side="right")
         tk.Button(
             buttons, text="Apply", width=8,
@@ -697,6 +755,8 @@ class PyTradeViz:
         self.levels_applied = {
             "mode": staged["mode"].get(),
             "settings": LevelSettings(pivot_bars, width_pct, min_touches),
+            "horizon": int(staged["horizon"].get()),
+            "rejection": staged["rejection"].get(),
             "windows": {
                 label: {
                     "enabled": variables["enabled"].get(),
@@ -713,20 +773,40 @@ class PyTradeViz:
     def levels_status_text(self, label: str) -> str:
         if not self.price_data:
             return "No price data loaded"
-        finder, _ = self.levels_for_chart()
+        finder, _, _ = self.levels_for_chart()
         last = len(self.price_data) - 1
         if finder.pivot_count(last, label) == 0:
             return "No pivots in this window"
         levels = finder.levels_at(last, label)
         supports = sum(1 for level in levels if level.kind == SUPPORT)
-        return f"Latest: {supports} support, {len(levels) - supports} resistance"
+        summary = f"Latest: {supports} support, {len(levels) - supports} resistance"
+        if not levels:
+            return summary
+        study = self.breakout_study(label)
+        parts = []
+        for level in sorted(levels, key=lambda level: level.price):
+            odds = study.odds_at(last, level.price, level.kind, level.touches)
+            prefix = "S" if level.kind == SUPPORT else "R"
+            parts.append(f"{prefix} {level.price:.2f} {odds_text(odds)}")
+        return f"{summary}  |  " + "   ".join(parts)
 
-    def levels_for_chart(self) -> Tuple[LevelFinder, Dict[str, List[Segment]]]:
+    def levels_for_chart(self) -> Tuple[LevelFinder, Dict[str, List[Segment]],
+                                        Dict[Tuple[str, int, str], BreakoutStudy]]:
         settings = self.levels_applied["settings"]
         key = (len(self.price_data or []), settings)
         if self._levels_cache is None or self._levels_cache[0] != key:
-            self._levels_cache = (key, LevelFinder(self.price_data or [], settings), {})
-        return self._levels_cache[1], self._levels_cache[2]
+            self._levels_cache = (key, LevelFinder(self.price_data or [], settings), {}, {})
+        return self._levels_cache[1], self._levels_cache[2], self._levels_cache[3]
+
+    def breakout_study(self, label: str) -> BreakoutStudy:
+        """Breakout odds for one window under the current horizon and rejection rule."""
+        finder, _, studies = self.levels_for_chart()
+        horizon = self.levels_applied["horizon"]
+        rejection = self.levels_applied["rejection"]
+        key = (label, horizon, rejection)
+        if key not in studies:
+            studies[key] = BreakoutStudy(self.price_data or [], finder, label, horizon, rejection)
+        return studies[key]
 
     def build_simple_moving_average_content(self, tk: ModuleType, window: Any) -> None:
         # Edits are staged in these variables and only applied by the Apply button.
@@ -775,11 +855,40 @@ class PyTradeViz:
             }
         self.draw_overlays()
 
-    def open_modal_window(self, tk: ModuleType, title: str) -> Any:
+    def open_levels_help(self, tk: ModuleType, parent: Any) -> None:
+        help_window = self.open_modal_window(tk, "Support and Resistance Help", parent=parent)
+        body = tk.Frame(help_window)
+        body.pack(fill="both", expand=True, padx=12, pady=(12, 0))
+        text = tk.Text(body, wrap="word", width=84, height=30, padx=8, pady=6,
+                       relief="flat", cursor="arrow", font="TkDefaultFont")
+        scrollbar = tk.Scrollbar(body, command=text.yview)
+        text.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        text.pack(side="left", fill="both", expand=True)
+        heading_font = (tkfont.nametofont("TkDefaultFont").cget("family"), 11, "bold")
+        text.tag_configure("heading", font=heading_font, spacing1=10, spacing3=2)
+        text.tag_configure("body", spacing3=6)
+        for heading, paragraphs in LEVELS_HELP:
+            text.insert("end", heading + "\n", "heading")
+            for paragraph in paragraphs:
+                text.insert("end", paragraph + "\n", "body")
+        text.configure(state="disabled")
+        tk.Button(help_window, text="Close", width=8,
+                  command=help_window.destroy).pack(pady=12)
+        # Closing help hands the modal grab back to the window that opened it.
+        help_window.bind("<Destroy>", lambda event: self.return_grab(event, help_window, parent))
+
+    def return_grab(self, event: Any, help_window: Any, parent: Any) -> None:
+        if event.widget is not help_window:
+            return
+        parent.after_idle(lambda: parent.grab_set() if parent.winfo_exists() else None)
+
+    def open_modal_window(self, tk: ModuleType, title: str, parent: Any = None) -> Any:
         # Selecting a menu item already unposts the menus; this opens the modal dialog.
-        window = tk.Toplevel(self.window)
+        parent = self.window if parent is None else parent
+        window = tk.Toplevel(parent)
         window.title(title)
-        window.transient(self.window)
+        window.transient(parent)
         window.wait_visibility()
         window.grab_set()
         return window
@@ -1140,6 +1249,7 @@ class PyTradeViz:
         self.candle_info_label.configure(bg=theme["canvas"], fg=theme["ink"])
         self.select_mode_label.configure(bg=theme["canvas"], fg=theme["ink"])
         self.no_data_label.configure(bg=theme["canvas"], fg=theme["ink"])
+        self.ticker_label.configure(bg=theme["canvas"], fg=theme["ink"])
         self.render_roi_panel()
         self.dark_mode_button.configure(text="☀" if self.dark_mode else "☾")
         self.draw_overlays()
@@ -1165,6 +1275,7 @@ class PyTradeViz:
         old_upper, old_lower = self.price_upper, self.price_lower
 
         self.price_data.extend(new_rows)
+        self.update_ticker_label()
         self.indicators_object.calculate_RSI_incremental()
         self.calculate_price_range(new_rows)
         self.price_upper = max(old_upper, self.price_upper)
@@ -1574,24 +1685,29 @@ class PyTradeViz:
         self._levels_items = []
         if not self.price_data:
             return
-        finder, segment_cache = self.levels_for_chart()
+        finder, segment_cache, _ = self.levels_for_chart()
         last = len(self.price_data) - 1
         static = self.levels_applied["mode"] == "Static"
         first_visible, last_visible = self.visible_candle_range()
+        occupied_label_boxes: List[Tuple[int, int, int, int]] = []
         for label, settings in self.levels_applied["windows"].items():
             if not settings["enabled"]:
                 continue
+            study = self.breakout_study(label)
             if static:
-                spans = [(0, last, level.price, level.kind)
+                # Static levels have no qualification candle of their own, so they are
+                # priced as of the latest candle.
+                spans = [(0, last, level.price, level.kind, last, level.touches)
                          for level in finder.static_levels(label)]
             else:
                 if label not in segment_cache:
                     segment_cache[label] = finder.segments(label)
-                spans = [(segment.start, segment.end, segment.price, segment.kind)
+                spans = [(segment.start, segment.end, segment.price, segment.kind,
+                          segment.origin, segment.touches)
                          for segment in segment_cache[label]]
             color = self.sma_colors[settings["color"]]
             style = settings["style"]
-            for start, end, price, kind in spans:
+            for start, end, price, kind, origin, touches in spans:
                 if style == "Triangles":
                     # Only candles in view get a marker, so zoomed-out charts stay responsive.
                     for index in range(max(start, first_visible), min(end, last_visible) + 1):
@@ -1599,9 +1715,32 @@ class PyTradeViz:
                 else:
                     self.draw_level_line(start, end, price, kind, color, label,
                                          wavy=style == "Wavy")
+                # One odds label per level, where its drawing ends on screen. A level that
+                # runs past the right edge is labelled at that edge.
+                if start <= last_visible and end >= first_visible:
+                    odds = study.odds_at(origin, price, kind, touches)
+                    self.draw_level_odds(min(end, last_visible), price, color, label,
+                                         odds_text(odds), occupied_label_boxes)
         # Markers sit above the candles so a body never hides a level.
         if self._levels_items:
             self.canvas.tag_raise("levels")
+
+    def draw_level_odds(self, index: int, price: float, color: str, label: str,
+                        text: str, occupied: List[Tuple[int, int, int, int]]) -> None:
+        x = self.candle_x(index)
+        y = self.price_to_y(price)
+        # Anchored to the left of its point so the text stays clear of the price axis.
+        item = self.canvas.create_text(
+            x - 6, y - 6, text=text, anchor="se", fill=color,
+            tags=("levels", f"levels_{label}"))
+        # Labels that would land on one already drawn are dropped; the status line keeps them.
+        box = self.canvas.bbox(item)
+        if any(box[0] < other[2] and other[0] < box[2] and box[1] < other[3] and other[1] < box[3]
+               for other in occupied):
+            self.canvas.delete(item)
+            return
+        occupied.append(box)
+        self._levels_items.append(item)
 
     def draw_level_marker(self, index: int, price: float, kind: str, color: str,
                           label: str) -> None:

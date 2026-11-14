@@ -15,8 +15,12 @@ Other columns are ignored. Dates may be written as `YYYY-MM-DD`,
 `YYYY-MM-DD HH:MM[:SS]` (with a space or `T` between date and time), or
 `YYYY/MM/DD`. Rows may be in either oldest-first or newest-first order, but
 each timestamp must be unique. OHLC values may have a leading `$`. Ambiguous
-formats such as `MM/DD/YYYY` are not accepted. The `data/data.csv` sample
-(CryptoDataDownload format) and `data/AMZN_10_year_OHLC.csv` are examples. Opening a file shows its oldest year of data. Use the
+formats such as `MM/DD/YYYY` are not accepted. The asset ticker is the first
+value of a `symbol` column, or else a lone line above the header that is not a
+URL. The top-left corner shows that ticker and the close of the last candle
+loaded; the ticker is omitted when the file names none. The `data/data.csv`
+sample (CryptoDataDownload format) and `data/AMZN_10_year_OHLC.csv` are
+examples. Opening a file shows its oldest year of data. Use the
 **+3 months →** button at the bottom right to append the next three calendar
 months; the button is disabled when all data has been loaded. Missing dates do
 not create synthetic candles.
@@ -140,6 +144,32 @@ pivot count a level needs. Changes apply when **Apply** is pressed. Each window
 shows its latest support and resistance count, or "No pivots in this window".
 Dates are stored by day, so windows are measured in days, and on daily data the
 2-week window often has few or no pivots.
+The **Help** button in this window opens an in-app guide to these settings and the
+breakout odds, with the same rules described here.
+
+Breakout odds: the status line for each window adds, for each shown level, the
+historical chance that price breaks through it before it is rejected, in the form
+`S 99.12 38% n=24` (price, percent, and sample count). Two switches choose the rule:
+
+- *Horizon* (5 or 10 candles, default 10): how far ahead an outcome must be decided.
+- *Rejection* (1 ATR or 2%, default 1 ATR): how far price must move away from the
+  level to count as a rejection. 1 ATR uses the 14-candle average true range at the
+  level's first candle; 2% uses 2% of the level's price.
+
+A level is a breakout when a candle closes beyond its zone, and a rejection when
+price moves the rejection distance away from it. Whichever happens first decides
+the outcome, and a breakout wins if both happen on the same candle. Levels with
+neither within the horizon are left out. The percent is breakouts divided by
+breakouts plus rejections among levels in the same window with the same touch count
+(capped at 4) and distance from the close (under 1, 1 to 3, or 3 ATR and over), counting
+only levels whose outcome was already known when this level first qualified. A
+bucket with fewer than 10 outcomes shows `n=… (too few)` instead of a percent.
+Chart labels sit at the visible end of each level and are skipped where they would
+overlap another label; the status line always lists every shown level.
+
+These are historical frequencies, not forecasts. Levels in the same window overlap,
+so their outcomes are not independent, and the odds for recent levels are based
+on less data.
 
 The window can be resized or maximized.
 

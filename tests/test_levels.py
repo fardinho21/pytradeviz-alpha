@@ -100,11 +100,11 @@ class LevelFinderTests(unittest.TestCase):
     def test_segment_stops_on_the_last_candle_before_the_break(self):
         # Candle 8 closes at 98, beyond the 100 support's 1% zone, so the line ends at 7.
         finder = LevelFinder(self.rows, self.settings)
-        self.assertIn(Segment(5, 7, 100, SUPPORT), finder.segments("6M"))
+        self.assertIn(Segment(5, 7, 100, SUPPORT, 5, 2), finder.segments("6M"))
 
     def test_segment_runs_to_last_candle_when_not_broken(self):
         finder = LevelFinder(self.rows[:7], self.settings)
-        self.assertIn(Segment(5, 6, 100, SUPPORT), finder.segments("6M"))
+        self.assertIn(Segment(5, 6, 100, SUPPORT, 5, 2), finder.segments("6M"))
 
     def test_window_excludes_pivots_older_than_its_lookback(self):
         # The pivots at 100 are in January. Twenty flat candles from 1 March put the end

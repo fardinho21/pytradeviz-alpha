@@ -28,6 +28,10 @@ class FakeSource:
         batch, self.rows = self.rows[:self.batch_size], self.rows[self.batch_size:]
         return batch
 
+    @property
+    def ticker(self) -> None:
+        return None
+
 
 def load_price_rows() -> List[List[Any]]:
     path = Path(__file__).resolve().parents[1] / "data" / "data.csv"
