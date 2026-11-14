@@ -63,7 +63,7 @@ class ToolbarLayoutTests(unittest.TestCase):
         menu_bar = self.viz.window.nametowidget(self.viz.window.cget("menu"))
         self.assertEqual(self.menu_labels(menu_bar), ["File", "Indicators", "Strategies", "Data"])
         indicators = menu_bar.nametowidget(menu_bar.entrycget(1, "menu"))
-        self.assertEqual(self.menu_labels(indicators), ["Moving Averages", "RSI", "Bollinger"])
+        self.assertEqual(self.menu_labels(indicators), ["Moving Averages", "RSI", "Bollinger", "Support and Resistance"])
         moving_averages = indicators.nametowidget(indicators.entrycget(0, "menu"))
         self.assertEqual(self.menu_labels(moving_averages), ["Exponential", "Simple"])
 

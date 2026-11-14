@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Optional, Tuple
 
 from indicators import SMA_PERIODS
+from levels import LevelSettings
 from pytradeviz import PyTradeViz
 
 
@@ -82,6 +83,9 @@ class ZoomTests(unittest.TestCase):
         self.viz._sma_items = []
         self.viz.bollinger_applied = {"enabled": False}
         self.viz._bollinger_items = []
+        self.viz.levels_applied = {"mode": "Causal", "settings": LevelSettings(), "windows": {}}
+        self.viz._levels_items = []
+        self.viz._levels_cache = None
 
     def zoom(
         self, delta: int, widget: Optional[object] = None,

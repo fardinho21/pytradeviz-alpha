@@ -15,6 +15,9 @@ from indicators import (
     Indicators, SMA_PERIODS, HIGH_COLUMN, LOW_COLUMN, RSI_OVERBOUGHT, RSI_OVERSOLD,
     band_intersects, rsi_crosses_level,
 )
+from levels import (
+    RESISTANCE, SUPPORT, WINDOW_LOOKBACKS, LevelFinder, LevelSettings, Segment,
+)
 from labeled_selections import (
     EXPORT_DIRECTORY, MOVING_AVERAGE_FIELDS, Selections, export_path, merge_selections,
     read_selections, write_selections,
@@ -64,6 +67,18 @@ class PyTradeViz:
         "Green": "#43a047", "Violet": "#8e24aa",
     }
     sma_default_colors: Dict[int, str] = {3: "Red", 7: "Blue", 14: "Orange", 30: "Violet"}
+    levels_default_colors: Dict[str, str] = {
+        "2W": "Red", "1M": "Blue", "2M": "Orange", "3M": "Green", "6M": "Violet",
+    }
+    # Half the width and height of a level marker triangle, in pixels.
+    levels_marker_radius: int = 5
+    levels_styles: Tuple[str, ...] = ("Triangles", "Lines", "Wavy")
+    levels_default_style: str = "Triangles"
+    # Zigzag and wave geometry for resistance levels, in canvas pixels.
+    levels_zigzag_step: float = 6.0
+    levels_zigzag_amplitude: float = 3.0
+    levels_wave_period: float = 16.0
+    levels_wave_amplitude: float = 3.0
     dark_mode: bool = False
     crosshair_root: Optional[Tuple[int, int]] = None
     price_limit: int = 3000
@@ -173,6 +188,24 @@ class PyTradeViz:
         # Bollinger Bands settings. The period and width are fixed in the indicator module.
         self.bollinger_applied: Dict[str, Any] = {"enabled": False, "style": "Solid", "color": "Green"}
         self._bollinger_items: List[int] = []
+        # Support and resistance settings. Each window label has its own display settings.
+        self.levels_applied: Dict[str, Any] = {
+            "mode": "Causal",
+            "settings": LevelSettings(),
+            "windows": {
+                label: {
+                    "enabled": False,
+                    "color": self.levels_default_colors[label],
+                    "style": self.levels_default_style,
+                }
+                for label in WINDOW_LOOKBACKS
+            },
+        }
+        self._levels_items: List[int] = []
+        # Finder and per-window segments, rebuilt when the rows or level settings change.
+        self._levels_cache: Optional[
+            Tuple[Tuple[int, LevelSettings], LevelFinder, Dict[str, List[Segment]]]
+        ] = None
 
         self.calculate_grid_space_x(price_data_object)
         self._base_chart_width = self.chart_grid_space_x
@@ -278,6 +311,8 @@ class PyTradeViz:
             canvas.delete("all")
         self._sma_items = []
         self._bollinger_items = []
+        self._levels_items = []
+        self._levels_cache = None
 
         self.price_data_object = {"price_data": rows}
         self.price_data = rows
@@ -507,6 +542,9 @@ class PyTradeViz:
             label="Bollinger Bands", command=lambda: self.open_bollinger_window(tk),
         )
         indicators_menu.add_cascade(label="Bollinger", menu=bollinger_menu)
+        indicators_menu.add_command(
+            label="Support and Resistance", command=lambda: self.open_levels_window(tk),
+        )
         return indicators_menu
 
     def open_moving_average_window(self, tk: ModuleType, name: str) -> None:
@@ -559,6 +597,136 @@ class PyTradeViz:
         self.calculate_price_range()
         self.rescale_price_scale(old_upper, old_lower)
         self.draw_overlays()
+
+    def open_levels_window(self, tk: ModuleType) -> None:
+        window = self.open_modal_window(tk, "Support and Resistance")
+        self.build_levels_content(tk, window)
+
+    def build_levels_content(self, tk: ModuleType, window: Any) -> None:
+        # Edits are staged in these variables and only applied by the Apply button.
+        applied = self.levels_applied
+        settings = applied["settings"]
+        staged: Dict[str, Any] = {
+            "mode": tk.StringVar(window, value=applied["mode"]),
+            "settings": {
+                "pivot_bars": tk.StringVar(window, value=str(settings.pivot_bars)),
+                "width_pct": tk.StringVar(window, value=f"{settings.width_pct:g}"),
+                "min_touches": tk.StringVar(window, value=str(settings.min_touches)),
+            },
+            "windows": {},
+            "status": {},
+        }
+        for label in WINDOW_LOOKBACKS:
+            window_applied = applied["windows"][label]
+            staged["windows"][label] = {
+                "enabled": tk.BooleanVar(window, value=window_applied["enabled"]),
+                "color": tk.StringVar(window, value=window_applied["color"]),
+                "style": tk.StringVar(window, value=window_applied["style"]),
+            }
+            staged["status"][label] = tk.StringVar(window, value=self.levels_status_text(label))
+
+        mode_group = tk.LabelFrame(window, text="Mode", padx=10, pady=6)
+        mode_group.pack(fill="x", padx=12, pady=(12, 0))
+        tk.Radiobutton(
+            mode_group, text="Causal (levels as known at each candle)",
+            value="Causal", variable=staged["mode"],
+        ).grid(row=0, column=0, sticky="w")
+        tk.Radiobutton(
+            mode_group, text="Static (latest levels across the whole chart)",
+            value="Static", variable=staged["mode"],
+        ).grid(row=1, column=0, sticky="w")
+
+        detection = tk.LabelFrame(window, text="Detection", padx=10, pady=6)
+        detection.pack(fill="x", padx=12, pady=(12, 0))
+        detection_rows = (
+            ("Pivot bars (candles each side)", "pivot_bars"),
+            ("Cluster width (% of price)", "width_pct"),
+            ("Min touches", "min_touches"),
+        )
+        for row, (text, key) in enumerate(detection_rows):
+            tk.Label(detection, text=text).grid(row=row, column=0, sticky="w")
+            tk.Entry(detection, textvariable=staged["settings"][key], width=8).grid(
+                row=row, column=1, sticky="w", padx=(8, 0))
+
+        for label in WINDOW_LOOKBACKS:
+            variables = staged["windows"][label]
+            group = tk.LabelFrame(window, text=f"{label} window (max 2 support, 2 resistance)",
+                                  padx=10, pady=6)
+            group.pack(fill="x", padx=12, pady=(12, 0))
+            tk.Checkbutton(group, text="Show", variable=variables["enabled"]).grid(
+                row=0, column=0, sticky="w")
+            tk.Label(group, textvariable=staged["status"][label]).grid(
+                row=0, column=1, columnspan=6, sticky="w", padx=(8, 0))
+            tk.Label(group, text="Color:").grid(row=1, column=0, sticky="w")
+            for column, color in enumerate(self.sma_colors, start=1):
+                tk.Radiobutton(group, text=color, value=color, variable=variables["color"]).grid(
+                    row=1, column=column, sticky="w")
+            tk.Label(group, text="Style:").grid(row=2, column=0, sticky="w")
+            for column, style in enumerate(self.levels_styles, start=1):
+                tk.Radiobutton(group, text=style, value=style, variable=variables["style"]).grid(
+                    row=2, column=column, sticky="w")
+
+        buttons = tk.Frame(window)
+        buttons.pack(fill="x", padx=12, pady=12)
+        tk.Button(buttons, text="Close", width=8, command=window.destroy).pack(side="right")
+        tk.Button(
+            buttons, text="Apply", width=8,
+            command=lambda: self.apply_levels(window, staged),
+        ).pack(side="right", padx=(0, 8))
+
+    def apply_levels(self, window: Any, staged: Dict[str, Any]) -> None:
+        values = {key: var.get().strip() for key, var in staged["settings"].items()}
+        try:
+            pivot_bars = int(values["pivot_bars"])
+            width_pct = float(values["width_pct"])
+            min_touches = int(values["min_touches"])
+        except ValueError:
+            messagebox.showerror(
+                "Invalid level settings",
+                "Pivot bars and min touches must be whole numbers, and width must be a number.",
+                parent=window,
+            )
+            return
+        if pivot_bars < 1 or min_touches < 1 or not width_pct > 0:
+            messagebox.showerror(
+                "Invalid level settings",
+                "Pivot bars and min touches must be at least 1, and width must be above 0.",
+                parent=window,
+            )
+            return
+        self.levels_applied = {
+            "mode": staged["mode"].get(),
+            "settings": LevelSettings(pivot_bars, width_pct, min_touches),
+            "windows": {
+                label: {
+                    "enabled": variables["enabled"].get(),
+                    "color": variables["color"].get(),
+                    "style": variables["style"].get(),
+                }
+                for label, variables in staged["windows"].items()
+            },
+        }
+        for label, status in staged["status"].items():
+            status.set(self.levels_status_text(label))
+        self.draw_overlays()
+
+    def levels_status_text(self, label: str) -> str:
+        if not self.price_data:
+            return "No price data loaded"
+        finder, _ = self.levels_for_chart()
+        last = len(self.price_data) - 1
+        if finder.pivot_count(last, label) == 0:
+            return "No pivots in this window"
+        levels = finder.levels_at(last, label)
+        supports = sum(1 for level in levels if level.kind == SUPPORT)
+        return f"Latest: {supports} support, {len(levels) - supports} resistance"
+
+    def levels_for_chart(self) -> Tuple[LevelFinder, Dict[str, List[Segment]]]:
+        settings = self.levels_applied["settings"]
+        key = (len(self.price_data or []), settings)
+        if self._levels_cache is None or self._levels_cache[0] != key:
+            self._levels_cache = (key, LevelFinder(self.price_data or [], settings), {})
+        return self._levels_cache[1], self._levels_cache[2]
 
     def build_simple_moving_average_content(self, tk: ModuleType, window: Any) -> None:
         # Edits are staged in these variables and only applied by the Apply button.
@@ -1400,10 +1568,126 @@ class PyTradeViz:
                 tags=("bollinger", f"bollinger_{name}"),
             ))
 
+    def draw_levels(self) -> None:
+        for item in self._levels_items:
+            self.canvas.delete(item)
+        self._levels_items = []
+        if not self.price_data:
+            return
+        finder, segment_cache = self.levels_for_chart()
+        last = len(self.price_data) - 1
+        static = self.levels_applied["mode"] == "Static"
+        first_visible, last_visible = self.visible_candle_range()
+        for label, settings in self.levels_applied["windows"].items():
+            if not settings["enabled"]:
+                continue
+            if static:
+                spans = [(0, last, level.price, level.kind)
+                         for level in finder.static_levels(label)]
+            else:
+                if label not in segment_cache:
+                    segment_cache[label] = finder.segments(label)
+                spans = [(segment.start, segment.end, segment.price, segment.kind)
+                         for segment in segment_cache[label]]
+            color = self.sma_colors[settings["color"]]
+            style = settings["style"]
+            for start, end, price, kind in spans:
+                if style == "Triangles":
+                    # Only candles in view get a marker, so zoomed-out charts stay responsive.
+                    for index in range(max(start, first_visible), min(end, last_visible) + 1):
+                        self.draw_level_marker(index, price, kind, color, label)
+                else:
+                    self.draw_level_line(start, end, price, kind, color, label,
+                                         wavy=style == "Wavy")
+        # Markers sit above the candles so a body never hides a level.
+        if self._levels_items:
+            self.canvas.tag_raise("levels")
+
+    def draw_level_marker(self, index: int, price: float, kind: str, color: str,
+                          label: str) -> None:
+        x = self.candle_x(index)
+        y = self.price_to_y(price)
+        r = self.levels_marker_radius
+        tags = ("levels", f"levels_{label}")
+        if kind == SUPPORT:
+            # Solid triangle pointing up.
+            points = (x, y - r, x - r, y + r, x + r, y + r)
+            item = self.canvas.create_polygon(
+                *points, fill=color, outline=color, tags=tags)
+        else:
+            # Hollow triangle pointing down.
+            points = (x - r, y - r, x + r, y - r, x, y + r)
+            item = self.canvas.create_polygon(
+                *points, fill="", outline=color, width=2, tags=tags)
+        self._levels_items.append(item)
+
+    def draw_level_line(self, start: int, end: int, price: float, kind: str, color: str,
+                        label: str, wavy: bool) -> None:
+        """Draw a level as a line from candle start to candle end, clipped to the view.
+
+        Support is a straight line (solid, or dashed in Wavy style). Resistance is a
+        zigzag (solid in Lines style) or a wave (solid in Wavy style).
+        """
+        left, right = self.visible_x_range()
+        x0 = max(self.candle_x(start), left)
+        x1 = min(self.candle_x(end), right)
+        if x0 > x1:
+            return
+        y = self.price_to_y(price)
+        tags = ("levels", f"levels_{label}")
+        if kind == SUPPORT:
+            points = [x0, y, x1, y]
+            dash = (6, 4) if wavy else ()
+        elif wavy:
+            points = self.wave_points(x0, x1, y)
+            dash = ()
+        else:
+            points = self.zigzag_points(x0, x1, y)
+            dash = ()
+        item = self.canvas.create_line(
+            *points, fill=color, width=2, dash=dash, joinstyle="round", tags=tags)
+        self._levels_items.append(item)
+
+    def zigzag_points(self, x0: float, x1: float, y: float) -> List[float]:
+        # Vertices sit on a fixed pixel grid so the zigzag does not shift when scrolling.
+        step = self.levels_zigzag_step
+        amp = self.levels_zigzag_amplitude
+        points = [x0, y]
+        for k in range(math.floor(x0 / step) + 1, math.ceil(x1 / step)):
+            points.extend((k * step, y - amp if k % 2 else y + amp))
+        points.extend((x1, y))
+        return points
+
+    def wave_points(self, x0: float, x1: float, y: float) -> List[float]:
+        # Samples on a fixed pixel grid so the wave does not shift when scrolling.
+        sample = 2.0
+        period = self.levels_wave_period
+        amp = self.levels_wave_amplitude
+        points: List[float] = []
+        for k in range(math.floor(x0 / sample), math.ceil(x1 / sample) + 1):
+            x = min(max(k * sample, x0), x1)
+            points.extend((x, y - amp * math.sin(2 * math.pi * x / period)))
+        return points
+
+    def visible_x_range(self) -> Tuple[float, float]:
+        """Return the left and right canvas x coordinates of the visible area."""
+        return self.canvas.canvasx(0), self.canvas.canvasx(self.canvas.winfo_width())
+
+    def visible_candle_range(self) -> Tuple[int, int]:
+        """Return the first and last candle indexes that fall inside the visible canvas."""
+        left, right = self.visible_x_range()
+        first = math.floor((left / self._scale_x - self.chart_padding_x)
+                           / self.chart_grid_divider_v)
+        last = math.floor((right / self._scale_x - self.chart_padding_x)
+                          / self.chart_grid_divider_v)
+        last_index = len(self.price_data or []) - 1
+        return max(0, first), min(last_index, last)
+
     def draw_overlays(self) -> None:
         self.draw_selection_box()
         self.draw_moving_averages()
         self.draw_bollinger()
+        self.draw_levels()
         self.draw_crosshair()
 
     def candle_indices_in(self, x1: float, y1: float, x2: float, y2: float) -> Set[int]:

@@ -65,7 +65,8 @@ The menu bar has four menus:
   program.
 - **Indicators**: *Moving Averages* → *Simple* opens the simple moving average
   settings, and *Moving Averages* → *Exponential* opens an empty window for now.
-  *Bollinger* → *Bollinger Bands* opens the Bollinger settings. *RSI* is a placeholder.
+  *Bollinger* → *Bollinger Bands* opens the Bollinger settings. *Support and Resistance*
+  opens the level settings described below. *RSI* is a placeholder.
 - **Strategies**: a placeholder that does nothing yet.
 - **Data**: lists the labeled selections with their candle counts. *Export to JSON*
   and *Export to XML* write all selections to `data/labeled_data/selections_YYYYmmdd_HHMMSS.json`
@@ -106,6 +107,39 @@ checkbox, a line *Style* and a *Color* chosen the same way as the averages, and
 **Apply**. The three bands are drawn as lines only, with no shading. While the
 bands are shown, the price scale grows to include them and shrinks back when they
 are hidden.
+
+The Support and Resistance window draws horizontal price levels found from pivots
+(local highs and lows) in five look-back windows: 2 weeks, 1 month, 2 months,
+3 months, and 6 months, counted back from the latest candle in calendar time.
+Each window has its own *Show* checkbox, *Color*, and *Style*. The window
+defaults are Red (2W), Blue (1M), Orange (2M), Green (3M), and Violet (6M),
+and all five start hidden. The styles are:
+
+- *Triangles*: a marker on each visible candle the level spans, a solid upward
+  triangle for support and a hollow downward triangle for resistance.
+- *Lines*: a solid straight line for support and a solid zigzag line for resistance.
+- *Wavy*: a dashed straight line for support and a solid wavy line for resistance.
+
+Lines are drawn only across the visible part of the level's span. A level is a cluster of pivot prices within a width
+of the price, and it needs at least *Min touches* pivots. Each window
+shows at most 2 support levels (below the close) and 2 resistance levels (above the
+close) on any candle, the nearest to the close.
+
+- *Causal* mode draws each level from the first candle it qualifies, using only
+  the pivots confirmed by that candle, until price closes beyond the level's zone
+  (its width on either side) or its pivots leave the window. A pivot is confirmed
+  only after *Pivot bars* later candles have closed, so a level never uses future
+  candles.
+- *Static* mode draws the levels present at the latest candle across the full
+  chart.
+
+Detection settings: *Pivot bars* (default 2) is how many candles on each side a
+pivot must be higher or lower than. *Cluster width* (default 1.0%) is the percent
+of price within which pivot prices merge. *Min touches* (default 2) is the
+pivot count a level needs. Changes apply when **Apply** is pressed. Each window
+shows its latest support and resistance count, or "No pivots in this window".
+Dates are stored by day, so windows are measured in days, and on daily data the
+2-week window often has few or no pivots.
 
 The window can be resized or maximized.
 
