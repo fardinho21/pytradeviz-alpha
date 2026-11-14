@@ -3,10 +3,12 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from tkinter import font as tkfont
+import copy
 import csv
 import itertools
 import os
 import platform
+import dataclasses
 from types import ModuleType
 from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
 from candle import Candle
@@ -20,6 +22,11 @@ from breakout import (
     ATR_REJECTION, HORIZONS, REJECTION_RULES, BreakoutStudy, Odds,
 )
 from levels_help import LEVELS_HELP
+from sr_popups import SRPopup, popup_bounds
+from drawings import (
+    BOX, DOTTED, FILL_STIPPLE, LINE, SEGMENT, SEGMENT_CIRCLE_RADIUS, SOLID, STYLE_DASHES,
+    Drawing, Point, ToolKey, Toolbox, clip_line, fill_applicable, hit_test, toolbox_layout,
+)
 from levels import (
     RESISTANCE, SUPPORT, WINDOW_LOOKBACKS, LevelFinder, LevelSettings, Segment,
 )
@@ -28,6 +35,7 @@ from labeled_selections import (
     read_selections, write_selections,
 )
 from paginated_price_data import PaginatedPriceData
+from timeframes import DAILY, TIMEFRAMES, shows_day_labels, timeframe_rows
 
 DATA_DIRECTORY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
@@ -51,6 +59,21 @@ class PriceDataSource(Protocol):
     def load_next(self) -> List[List[Any]]: ...
 
 
+@dataclasses.dataclass
+class ChartTabState:
+    """What a time-frame tab remembers while another tab is shown."""
+    drawings: Tuple[Drawing, ...] = ()
+    draw_history: Tuple[Tuple[Drawing, ...], ...] = ()
+    sma_applied: Dict[int, Dict[str, Any]] = dataclasses.field(default_factory=dict)
+    bollinger_applied: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    levels_applied: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    zoom_level: float = 1.0
+    candle_height_scale: float = 1.0
+    # Left and top scroll positions as fractions of the scroll region. None means centered.
+    xview: float = 0.0
+    yview: Optional[float] = None
+
+
 class PyTradeViz:
 
     window_geo: str = "1020x750"
@@ -64,13 +87,13 @@ class PyTradeViz:
         "canvas": "white", "ink": "black", "grid": "black",
         "crosshair": "black", "crosshair_text": "white",
         "selection": "#8c8c8c", "highlight": "#ffffff",
-        "gain": "#1a7f37", "loss": "#cf222e",
+        "gain": "#1a7f37", "loss": "#cf222e", "sr_unavailable": "#f4c7c3",
     }
     dark_theme: Dict[str, str] = {
         "canvas": "black", "ink": "white", "grid": "#4a4a4a",
         "crosshair": "#f4a261", "crosshair_text": "black",
         "selection": "#e0894f", "highlight": "#f4a261",
-        "gain": "#3fb950", "loss": "#ff7b72",
+        "gain": "#3fb950", "loss": "#ff7b72", "sr_unavailable": "#4d2a2a",
     }
     # Simple moving average line styles and colors, keyed by the radio button labels.
     sma_line_styles: Dict[str, Tuple[int, ...]] = {
@@ -85,7 +108,7 @@ class PyTradeViz:
     }
     sma_default_colors: Dict[int, str] = {3: "Red", 7: "Blue", 14: "Orange", 30: "Violet"}
     levels_default_colors: Dict[str, str] = {
-        "2W": "Red", "1M": "Blue", "2M": "Orange", "3M": "Green", "6M": "Violet",
+        "1M": "Blue", "2M": "Orange", "3M": "Green", "6M": "Violet",
     }
     # Half the width and height of a level marker triangle, in pixels.
     levels_marker_radius: int = 5
@@ -108,6 +131,7 @@ class PyTradeViz:
     base_chart_height: int = 1000
     chart_grid_divider_v: int = 30
     chart_grid_divider_h: int = 20 #20px/price_level
+    min_price_label_gap: float = 14.0 #px between visible price labels
     chart_padding_x: int = 60
     chart_layout_info: Dict[str, Any] = {}
     incrementer: float = 0
@@ -131,6 +155,7 @@ class PyTradeViz:
     scrollbar_vertical: ttk.Scrollbar
     load_more_button: ttk.Button
     dark_mode_button: ttk.Button
+    theme_button_frame: ttk.Frame
     data_source: Optional[PriceDataSource]
     indicators_object: Indicators
     zoom_level: float
@@ -164,6 +189,31 @@ class PyTradeViz:
     roi_mode: bool = False
     export_mode: bool = False
     export_button: ttk.Button
+    # Support/resistance mode: click a candle to pick a window, then its levels are drawn.
+    sr_mode: bool = False
+    sr_button: ttk.Button
+    sr_color_name: str = "Orange"
+    sr_window_labels: Tuple[str, ...] = ("1M", "2M", "3M", "6M")
+    # Candle the popups belong to, the popups, and the (candle, window) being drawn.
+    _sr_popup_index: Optional[int] = None
+    _sr_popups: Tuple[SRPopup, ...] = ()
+    _sr_levels: Optional[Tuple[int, str]] = None
+    _sr_items: Tuple[int, ...] = ()
+    _sr_popup_items: Tuple[int, ...] = ()
+    # Draw mode. Drawings are stored in chart units so they stay put when the chart moves.
+    draw_mode: bool = False
+    draw_button: ttk.Button
+    draw_icon: Any
+    draw_color_name: str = "Blue"
+    draw_tool: Optional[str] = None
+    draw_style: str = SOLID
+    draw_filled: bool = False
+    drawings: Tuple[Drawing, ...] = ()
+    _draw_history: Tuple[Tuple[Drawing, ...], ...] = ()
+    _draw_next_id: int = 1
+    _draw_selected: Optional[int] = None
+    _draw_gesture: Optional[Dict[str, Any]] = None
+    _toolbox: Optional[Toolbox] = None
     # Labels map to candle records, in the order the selections were saved.
     labeled_selections: Selections
     export_directory: str = EXPORT_DIRECTORY
@@ -190,6 +240,10 @@ class PyTradeViz:
 
         self.price_data_object=price_data_object
         self.price_data=price_data_object["price_data"]
+        # Loaded daily rows feed every time-frame tab. On the daily tab the charted rows are this same list.
+        self._daily_rows = self.price_data
+        self.active_timeframe = DAILY
+        self._tab_states: Dict[str, ChartTabState] = {}
         self.selected_indices = set()
         self.labeled_selections = {}
         self.data_source = data_source
@@ -250,6 +304,8 @@ class PyTradeViz:
         self.initialize_scrollbars(ttk, tk)
         self.initialize_dark_mode_button(ttk)
         self.initialize_select_mode_button(ttk, tk)
+        self.initialize_draw_button(ttk, tk)
+        self.initialize_timeframe_bar(ttk)
         self.initialize_select_mode_label(tk)
         # configure
         self.configure_all_canvas()
@@ -280,6 +336,7 @@ class PyTradeViz:
         self.center_vertical_view()
         self.update_no_data_label()
         self.update_ticker_label()
+        self.update_timeframe_buttons()
 
         #set price data for indicators_objec 
 
@@ -331,6 +388,69 @@ class PyTradeViz:
     ) -> None:
         """Show rows from the first candle, replacing what was on the chart. Empty rows clear it."""
         self.reset_interaction_state()
+        self._daily_rows = rows
+        self.data_source = data_source
+        self.active_timeframe = DAILY
+        # Every tab belongs to the loaded data, so the tab memories start over with the file.
+        self._tab_states = {}
+        state = self.inherited_tab_state()
+        self.load_tab_state(state)
+        self._tab_states[DAILY] = state
+        self.build_chart(rows, state)
+
+    def inherited_tab_state(self) -> ChartTabState:
+        """Starting state for a tab: copies of the current indicator settings and a default view."""
+        return ChartTabState(
+            sma_applied=copy.deepcopy(self.sma_applied),
+            bollinger_applied=copy.deepcopy(self.bollinger_applied),
+            levels_applied=copy.deepcopy(self.levels_applied),
+        )
+
+    def capture_tab_state(self) -> ChartTabState:
+        return ChartTabState(
+            drawings=self.drawings,
+            draw_history=self._draw_history,
+            sma_applied=self.sma_applied,
+            bollinger_applied=self.bollinger_applied,
+            levels_applied=self.levels_applied,
+            zoom_level=self.zoom_level,
+            candle_height_scale=self.candle_height_scale,
+            xview=self.canvas.xview()[0],
+            yview=self.canvas.yview()[0],
+        )
+
+    def store_tab_state(self) -> None:
+        self._tab_states[self.active_timeframe] = self.capture_tab_state()
+
+    def load_tab_state(self, state: ChartTabState) -> None:
+        """Make the state's drawings and indicator settings the live ones."""
+        self.drawings = state.drawings
+        self._draw_history = state.draw_history
+        self.sma_applied = state.sma_applied
+        self.bollinger_applied = state.bollinger_applied
+        self.levels_applied = state.levels_applied
+
+    def select_timeframe(self, label: str) -> None:
+        if label == self.active_timeframe or label not in TIMEFRAMES or not self._daily_rows:
+            return
+        self.store_tab_state()
+        self.reset_interaction_state()
+        self.active_timeframe = label
+        state = self._tab_states.get(label)
+        if state is None:
+            state = self.inherited_tab_state()
+            self._tab_states[label] = state
+        self.load_tab_state(state)
+        self.build_chart(timeframe_rows(self._daily_rows, label), state)
+
+    def build_chart(
+        self, rows: List[List[Any]], state: ChartTabState, keep_left: Optional[float] = None
+    ) -> None:
+        """Draw rows as the chart, then restore the zoom and scroll position saved in state.
+
+        keep_left is an absolute horizontal position at the current zoom, used when rows are
+        appended so the view does not jump.
+        """
         for canvas in (self.canvas, self.canvas_price, self.canvas_date, self.canvas_indicators):
             canvas.delete("all")
         self._sma_items = []
@@ -340,7 +460,6 @@ class PyTradeViz:
 
         self.price_data_object = {"price_data": rows}
         self.price_data = rows
-        self.data_source = data_source
         self.indicators_object.set_price_data(rows)
         self.indicators_object.calculate_RSI_incremental()
 
@@ -361,16 +480,65 @@ class PyTradeViz:
         self.render_dates()
         self.render_indicators()
         self.fit_chart_to_canvas(self.canvas.winfo_width(), self.canvas.winfo_height())
+        self.apply_view_zoom(state.zoom_level, state.candle_height_scale)
         self.update_scroll_regions()
-        self.canvas.xview_moveto(0)
-        self.center_vertical_view()
+        if keep_left is None:
+            self.canvas.xview_moveto(state.xview)
+        else:
+            self.canvas.xview_moveto(keep_left / self.chart_grid_space_x)
+        if state.yview is None:
+            self.center_vertical_view()
+        else:
+            self.canvas.yview_moveto(state.yview)
         self.update_load_more_button()
         self.update_no_data_label()
         self.update_ticker_label()
+        self.update_timeframe_buttons()
         self.draw_overlays()
 
+    def apply_view_zoom(self, zoom_level: float, candle_height_scale: float) -> None:
+        """Apply a saved zoom and candle height to a chart that was just built and fitted.
+
+        The factors match what zoom_chart and scale_candle_height apply to the canvases.
+        """
+        x_factor = zoom_level
+        y_factor = zoom_level * candle_height_scale
+        if x_factor != 1 or y_factor != 1:
+            self.canvas.scale("all", 0, 0, x_factor, y_factor)
+            self.canvas_price.scale("all", 0, 0, 1, y_factor)
+            self.canvas_date.scale("all", 0, 0, x_factor, 1)
+            self.canvas_indicators.scale("all", 0, 0, x_factor, 1)
+            self.chart_grid_space_x *= x_factor
+            self.chart_grid_space_y *= y_factor
+            self._scale_x *= x_factor
+            self._scale_y *= y_factor
+        self.zoom_level = zoom_level
+        self.candle_height_scale = candle_height_scale
+
+    def initialize_timeframe_bar(self, ttk: ModuleType) -> None:
+        # Its own grid row above the chart, right-aligned so the tabs sit at the top right.
+        self.timeframe_bar = ttk.Frame(self.window)
+        self.timeframe_buttons: Dict[str, Any] = {}
+        for column, label in enumerate(TIMEFRAMES):
+            button = ttk.Button(
+                self.timeframe_bar, text=label, width=0,
+                command=lambda label=label: self.select_timeframe(label),
+            )
+            button.grid(row=0, column=column, sticky="nse", padx=(4, 0) if column else 0)
+            self.timeframe_buttons[label] = button
+        self.update_timeframe_buttons()
+
+    def update_timeframe_buttons(self) -> None:
+        has_data = bool(self._daily_rows)
+        for label, button in self.timeframe_buttons.items():
+            button.state(["pressed" if label == self.active_timeframe else "!pressed"])
+            button.state(["!disabled" if has_data else "disabled"])
+
     def reset_interaction_state(self) -> None:
-        self.selection_mode = self.roi_mode = self.export_mode = False
+        self.selection_mode = self.roi_mode = self.export_mode = self.sr_mode = False
+        self.draw_mode = False
+        self.clear_draw_state()
+        self.clear_sr_state()
         self.selected_indices = set()
         self._selection_box = None
         self._box_origin = None
@@ -766,6 +934,7 @@ class PyTradeViz:
                 for label, variables in staged["windows"].items()
             },
         }
+        self.dismiss_sr_popups()
         for label, status in staged["status"].items():
             status.set(self.levels_status_text(label))
         self.draw_overlays()
@@ -995,7 +1164,7 @@ class PyTradeViz:
 
     def configure_grid_layout(self) -> None:
         self.window.grid_columnconfigure(0, weight=1)
-        self.window.grid_rowconfigure(0, weight=1)
+        self.window.grid_rowconfigure(1, weight=1)
         self.frame_canvas.grid_columnconfigure(0, weight=1)
         self.frame_canvas.grid_rowconfigure(0, weight=1)
         self.frame_canvas_price.grid_columnconfigure(0, weight=1)
@@ -1003,16 +1172,17 @@ class PyTradeViz:
         self.frame_canvas_date.grid_columnconfigure(0, weight=1)
         self.frame_canvas_indicators.grid_columnconfigure(0, weight=1)
 
-        self.frame_canvas.grid(row=0, column=0, sticky="nsew")
-        self.frame_canvas_price.grid(row=0, column=1, sticky="nsew")
-        self.frame_canvas_date.grid(row=1, column=0, sticky="ew")
-        self.frame_canvas_indicators.grid(row=2, column=0, sticky="ew")
-        self.bottom_bar.grid(row=3, column=0, sticky="ew")
+        self.timeframe_bar.grid(row=0, column=0, columnspan=3, sticky="e", pady=(2, 0))
+        self.frame_canvas.grid(row=1, column=0, sticky="nsew")
+        self.frame_canvas_price.grid(row=1, column=1, sticky="nsew")
+        self.frame_canvas_date.grid(row=2, column=0, sticky="ew")
+        self.frame_canvas_indicators.grid(row=3, column=0, sticky="ew")
+        self.bottom_bar.grid(row=4, column=0, sticky="ew")
         self.mode_button_frame.pack(side="right")
         self.scrollbar_horizontal.pack(side="left", fill="x", expand=True)
-        self.load_more_button.grid(row=2, column=1, sticky="nsw")
-        self.dark_mode_button.grid(row=1, column=1, sticky="nsw")
-        self.scrollbar_vertical.grid(row=0, column=2, sticky="ns")
+        self.load_more_button.grid(row=3, column=1, sticky="nsw")
+        self.theme_button_frame.grid(row=2, column=1, sticky="nsw")
+        self.scrollbar_vertical.grid(row=1, column=2, sticky="ns")
         self.canvas.grid(row=0, column=0, sticky="nsew")
         self.canvas_price.grid(row=0, column=0, sticky="nsew")
         self.canvas_date.grid(row=0, column=0, sticky="ew")
@@ -1070,6 +1240,13 @@ class PyTradeViz:
         self.price_upper = max(1.60, scale_highest + margin)
         self.price_lower = min(0, scale_lowest - margin)
 
+    def thin_price_labels(self) -> None:
+        """Show every Nth price label so that visible labels keep a readable pixel gap."""
+        gap = self.chart_grid_divider_h * self.chart_grid_space_y / self.base_chart_height
+        step = max(1, math.ceil(self.min_price_label_gap / gap))
+        for index, item in enumerate(self.canvas_price.find_withtag("price_label")):
+            self.canvas_price.itemconfigure(item, state="normal" if index % step == 0 else "hidden")
+
     def rescale_price_scale(self, old_upper: float, old_lower: float) -> Tuple[float, float]:
         """Stretch the candles and price labels from the old range to the current one.
 
@@ -1095,6 +1272,7 @@ class PyTradeViz:
 
     def render_dates(self, start: int = 0, tags: Tuple[str, ...] = ()) -> None:
         ink = self.get_theme()["ink"]
+        show_days = shows_day_labels(self.active_timeframe)
         y = self.price_data[start - 1][0][0] if start else ""
         m = self.price_data[start - 1][0][1] if start else ""
         for i in range(start, len(self.price_data)):
@@ -1105,13 +1283,13 @@ class PyTradeViz:
             
             if im != str(m) or iy != str(y):
                 m = im
-                m_name = datetime.datetime.strptime(str(m), "%m").strftime("%b")
+                m_name = datetime.datetime.strptime(str(m), "%m").strftime("%b")[:2]
 
                 self.canvas_date.create_text(self.chart_padding_x + i*self.chart_grid_divider_v, 10, text=m_name, fill=ink, tags=("ink",) + tags)
             if iy != str(y):
                 y = iy
                 self.canvas_date.create_text(self.chart_padding_x + i*self.chart_grid_divider_v, 30, text="Y"+str(iy)[2:], fill=ink, tags=("ink",) + tags)
-            else:
+            elif show_days:
                 self.canvas_date.create_text(self.chart_padding_x + i*self.chart_grid_divider_v, 30, text=str(id), fill=ink, tags=("ink",) + tags)
         pass
 
@@ -1122,10 +1300,13 @@ class PyTradeViz:
         return self.dark_theme if self.dark_mode else self.light_theme
 
     def initialize_dark_mode_button(self, ttk: ModuleType) -> None:
+        # Shares a grid cell with the draw button so the two sit side by side.
+        self.theme_button_frame = ttk.Frame(self.window)
         self.dark_mode_button = ttk.Button(
-            self.window, text="☀" if self.dark_mode else "☾", width=1,
+            self.theme_button_frame, text="☀" if self.dark_mode else "☾", width=1,
             command=self.toggle_dark_mode,
         )
+        self.dark_mode_button.grid(row=0, column=0, sticky="nsw")
 
     def initialize_select_mode_button(self, ttk: ModuleType, tk: ModuleType) -> None:
         # Black in both themes, matching the other button icons.
@@ -1145,6 +1326,10 @@ class PyTradeViz:
             self.mode_button_frame, text="{</>}", width=0, command=self.toggle_export_mode,
         )
         self.export_button.grid(row=0, column=2, sticky="nsw", padx=(4, 0))
+        self.sr_button = ttk.Button(
+            self.mode_button_frame, text="S-R", width=0, command=self.toggle_sr_mode,
+        )
+        self.sr_button.grid(row=0, column=3, sticky="nsw", padx=(4, 0))
 
     def make_candle_group_icon(self, tk: ModuleType, ink: str) -> Any:
         icon = tk.PhotoImage(master=self.window, width=18, height=18)
@@ -1155,6 +1340,34 @@ class PyTradeViz:
             icon.put(ink, to=(cx, wick_top, cx + 1, wick_bottom + 1))
             icon.put(ink, to=(cx - 1, body_top, cx + 2, body_bottom + 1))
         return icon
+
+    def make_pencil_icon(self, tk: ModuleType, ink: str) -> Any:
+        icon = tk.PhotoImage(master=self.window, width=18, height=18)
+        for x in range(18):
+            for y in range(18):
+                diagonal = x + y
+                if 4 <= x <= 14 and abs(diagonal - 17) <= 1:
+                    # Barrel, running from the tip up to the eraser.
+                    pixel = True
+                elif 1 <= x <= 3 and abs(diagonal - 17) <= x - 1:
+                    # Sharpened tip.
+                    pixel = True
+                elif x >= 15 and abs(diagonal - 17) <= 1:
+                    # Eraser end.
+                    pixel = True
+                else:
+                    pixel = False
+                if pixel:
+                    icon.put(ink, to=(x, y, x + 1, y + 1))
+        return icon
+
+    def initialize_draw_button(self, ttk: ModuleType, tk: ModuleType) -> None:
+        # Black in both themes, matching the other button icons.
+        self.draw_icon = self.make_pencil_icon(tk, self.light_theme["ink"])
+        self.draw_button = ttk.Button(
+            self.theme_button_frame, image=self.draw_icon, command=self.toggle_draw_mode,
+        )
+        self.draw_button.grid(row=0, column=1, sticky="nsw", padx=(4, 0))
 
     def initialize_select_mode_label(self, tk: ModuleType) -> None:
         theme = self.get_theme()
@@ -1172,32 +1385,52 @@ class PyTradeViz:
     def toggle_selection_mode(self) -> None:
         self.selection_mode = not self.selection_mode
         if self.selection_mode:
-            self.roi_mode = self.export_mode = False
+            self.roi_mode = self.export_mode = self.sr_mode = self.draw_mode = False
         self.clear_gesture_state()
         self.update_mode_widgets()
 
     def toggle_roi_mode(self) -> None:
         self.roi_mode = not self.roi_mode
         if self.roi_mode:
-            self.selection_mode = self.export_mode = False
+            self.selection_mode = self.export_mode = self.sr_mode = self.draw_mode = False
         self.clear_gesture_state()
         self.update_mode_widgets()
 
     def toggle_export_mode(self) -> None:
         self.export_mode = not self.export_mode
         if self.export_mode:
-            self.selection_mode = self.roi_mode = False
+            self.selection_mode = self.roi_mode = self.sr_mode = self.draw_mode = False
+        self.clear_gesture_state()
+        self.update_mode_widgets()
+
+    def toggle_sr_mode(self) -> None:
+        self.sr_mode = not self.sr_mode
+        if self.sr_mode:
+            self.selection_mode = self.roi_mode = self.export_mode = self.draw_mode = False
+        self.clear_gesture_state()
+        self.update_mode_widgets()
+
+    def toggle_draw_mode(self) -> None:
+        self.draw_mode = not self.draw_mode
+        if self.draw_mode:
+            self.selection_mode = self.roi_mode = self.export_mode = self.sr_mode = False
         self.clear_gesture_state()
         self.update_mode_widgets()
 
     def exit_modes(self) -> None:
         if not self.gesture_active():
             return
-        self.selection_mode = self.roi_mode = self.export_mode = False
+        self.selection_mode = self.roi_mode = self.export_mode = self.sr_mode = False
+        self.draw_mode = False
         self.clear_gesture_state()
         self.update_mode_widgets()
 
     def gesture_active(self) -> bool:
+        return (self.selection_mode or self.roi_mode or self.export_mode or self.sr_mode
+                or self.draw_mode)
+
+    def box_gesture_active(self) -> bool:
+        """Modes where a drag draws a box instead of scrolling the chart."""
         return self.selection_mode or self.roi_mode or self.export_mode
 
     def clear_gesture_state(self) -> None:
@@ -1205,7 +1438,18 @@ class PyTradeViz:
         self._roi_span = None
         self.roi_header = None
         self.roi_results = None
+        self.clear_draw_state()
+        self.clear_sr_state()
         self.set_selection(set(), None)
+
+    def clear_draw_state(self) -> None:
+        self._draw_gesture = None
+        self._draw_selected = None
+
+    def clear_sr_state(self) -> None:
+        self._sr_popup_index = None
+        self._sr_popups = ()
+        self._sr_levels = None
 
     def update_mode_widgets(self) -> None:
         if self.gesture_active():
@@ -1213,6 +1457,10 @@ class PyTradeViz:
                 text = "ROI mode enabled"
             elif self.export_mode:
                 text = "select and export mode"
+            elif self.sr_mode:
+                text = "support/resistance mode"
+            elif self.draw_mode:
+                text = "draw mode"
             else:
                 text = "select mode enabled"
             self.select_mode_label.configure(text=text)
@@ -1222,6 +1470,12 @@ class PyTradeViz:
         self.select_button.state(["pressed" if self.selection_mode else "!pressed"])
         self.roi_button.state(["pressed" if self.roi_mode else "!pressed"])
         self.export_button.state(["pressed" if self.export_mode else "!pressed"])
+        self.sr_button.state(["pressed" if self.sr_mode else "!pressed"])
+        self.draw_button.state(["pressed" if self.draw_mode else "!pressed"])
+        if not self.draw_mode:
+            self.canvas.configure(cursor="")
+        self.draw_drawings()
+        self.draw_toolbox()
 
     def place_mode_label(self) -> None:
         # Sit below the ROI panel while it is shown, otherwise below the OHLC box.
@@ -1268,13 +1522,17 @@ class PyTradeViz:
             self.load_more_button.state(["disabled"])
             return
 
+        if self.active_timeframe != DAILY:
+            self.extend_active_timeframe(new_rows)
+            return
+
         old_width = self.chart_grid_space_x
         old_base_width = self._base_chart_width
         old_left = self.canvas.xview()[0] * old_width
         old_top = self.canvas.yview()[0] * self.chart_grid_space_y
         old_upper, old_lower = self.price_upper, self.price_lower
 
-        self.price_data.extend(new_rows)
+        self._daily_rows.extend(new_rows)
         self.update_ticker_label()
         self.indicators_object.calculate_RSI_incremental()
         self.calculate_price_range(new_rows)
@@ -1329,6 +1587,16 @@ class PyTradeViz:
             self.load_more_button.state(["disabled"])
         self.draw_overlays()
         
+    def extend_active_timeframe(self, new_rows: List[List[Any]]) -> None:
+        """Append daily rows while a derived tab is shown, then rebuild that tab at the same view."""
+        self.store_tab_state()
+        keep_left = self.canvas.xview()[0] * self.chart_grid_space_x
+        self._daily_rows.extend(new_rows)
+        self.build_chart(
+            timeframe_rows(self._daily_rows, self.active_timeframe),
+            self._tab_states[self.active_timeframe], keep_left=keep_left,
+        )
+
     def get_canvas(self) -> tk.Canvas:
         return self.canvas
         pass
@@ -1357,7 +1625,9 @@ class PyTradeViz:
 
     def scroll_start(self, event: tk.Event) -> None:
         self._press_position = (event.x, event.y)
-        if self.gesture_active():
+        if self.draw_mode and event.widget is self.canvas and self.start_draw_gesture(event):
+            return
+        if self.box_gesture_active():
             if event.widget is self.canvas:
                 self._box_origin = (self.canvas.canvasx(event.x), self.canvas.canvasy(event.y))
                 self._box_current = self._box_origin
@@ -1371,7 +1641,7 @@ class PyTradeViz:
 
     def scroll_move(self, event: tk.Event) -> None:
         self.crosshair_root = (event.x_root, event.y_root)
-        if self.gesture_active():
+        if self.box_gesture_active():
             if self._box_origin is not None:
                 self._box_current = (
                     self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
@@ -1386,6 +1656,11 @@ class PyTradeViz:
                     )
                 self.draw_overlays()
             return
+        if self.draw_mode and self.continue_draw_gesture(event):
+            return
+        if self._sr_popups and self.moved_past_click_threshold(event):
+            # Popups are placed in canvas coordinates, so a drag would leave them behind.
+            self.dismiss_sr_popups()
         if event.widget is self.canvas:
             self.canvas.scan_dragto(event.x, event.y, gain=1)
         elif event.widget is self.canvas_price:
@@ -1435,6 +1710,9 @@ class PyTradeViz:
         self.candle_info_label.lift()
 
     def select_candle(self, event: tk.Event) -> None:
+        if self.draw_mode:
+            self.finish_draw_gesture(event)
+            return
         if self.roi_mode:
             self.finish_roi(event)
             return
@@ -1444,6 +1722,9 @@ class PyTradeViz:
             return
         if self.selection_mode:
             self.finish_box_select(event)
+            return
+        if self.sr_mode:
+            self.select_support_resistance(event)
             return
         if self._press_position is None:
             return
@@ -1457,8 +1738,69 @@ class PyTradeViz:
         if index is not None:
             self.show_candle_info(index)
 
+    def moved_past_click_threshold(self, event: tk.Event) -> bool:
+        if self._press_position is None:
+            return True
+        press_x, press_y = self._press_position
+        return abs(event.x - press_x) + abs(event.y - press_y) > self.click_drag_threshold
+
+    def select_support_resistance(self, event: tk.Event) -> None:
+        if self.moved_past_click_threshold(event):
+            return
+        x = self.canvas.canvasx(event.x)
+        y = self.canvas.canvasy(event.y)
+        popup = self.sr_popup_at(x, y)
+        if popup is not None:
+            if popup.enabled:
+                self.choose_sr_window(popup.label)
+            return
+        index = self.candle_index_at(x, y)
+        if index is None:
+            self.dismiss_sr_popups()
+        else:
+            self.show_sr_popups(index, x, y)
+
+    def show_sr_popups(self, index: int, x: float, y: float) -> None:
+        finder = self.levels_for_chart()[0]
+        boxes = popup_bounds(x, y, len(self.sr_window_labels), self.canvas_view_bounds())
+        self._sr_popups = tuple(
+            SRPopup(label, bool(finder.levels_at(index, label)), box)
+            for label, box in zip(self.sr_window_labels, boxes)
+        )
+        self._sr_popup_index = index
+        self.set_selection({index}, None)
+
+    def choose_sr_window(self, label: str) -> None:
+        if self._sr_popup_index is None:
+            return
+        self._sr_levels = (self._sr_popup_index, label)
+        self._sr_popups = ()
+        self._sr_popup_index = None
+        self.draw_overlays()
+
+    def dismiss_sr_popups(self) -> None:
+        if not self._sr_popups:
+            return
+        self._sr_popups = ()
+        self._sr_popup_index = None
+        # The highlight stays on the candle the drawn levels end on, if there is one.
+        self.set_selection({self._sr_levels[0]} if self._sr_levels else set(), None)
+
+    def sr_popup_at(self, x: float, y: float) -> Optional[SRPopup]:
+        for popup in self._sr_popups:
+            if popup.contains(x, y):
+                return popup
+        return None
+
+    def canvas_view_bounds(self) -> Tuple[float, float, float, float]:
+        canvas = self.canvas
+        return (canvas.canvasx(0), canvas.canvasy(0),
+                canvas.canvasx(canvas.winfo_width()), canvas.canvasy(canvas.winfo_height()))
+
     def track_crosshair(self, event: tk.Event) -> None:
         self.crosshair_root = (event.x_root, event.y_root)
+        if self.draw_mode and event.widget is self.canvas:
+            self.update_draw_cursor(event)
         self.draw_crosshair()
 
     def hide_crosshair(self, _event: tk.Event) -> None:
@@ -1631,7 +1973,7 @@ class PyTradeViz:
                 right * self._scale_x, self.price_to_y(bottom),
             )
 
-    def candle_x(self, index: int) -> float:
+    def candle_x(self, index: float) -> float:
         return (self.chart_padding_x + index * self.chart_grid_divider_v) * self._scale_x
 
     def draw_moving_averages(self) -> None:
@@ -1762,18 +2104,25 @@ class PyTradeViz:
 
     def draw_level_line(self, start: int, end: int, price: float, kind: str, color: str,
                         label: str, wavy: bool) -> None:
-        """Draw a level as a line from candle start to candle end, clipped to the view.
+        item = self.level_line_item(start, end, price, kind, color, wavy,
+                                    tags=("levels", f"levels_{label}"))
+        if item is not None:
+            self._levels_items.append(item)
 
-        Support is a straight line (solid, or dashed in Wavy style). Resistance is a
-        zigzag (solid in Lines style) or a wave (solid in Wavy style).
+    def level_line_item(self, start: int, end: int, price: float, kind: str, color: str,
+                        wavy: bool, tags: Tuple[str, ...]) -> Optional[int]:
+        """Create a level line from candle start to candle end, clipped to the view.
+
+        Returns None when the line lies outside the view. Support is a straight line
+        (solid, or dashed in Wavy style). Resistance is a zigzag (solid in Lines style)
+        or a wave (solid in Wavy style).
         """
         left, right = self.visible_x_range()
         x0 = max(self.candle_x(start), left)
         x1 = min(self.candle_x(end), right)
         if x0 > x1:
-            return
+            return None
         y = self.price_to_y(price)
-        tags = ("levels", f"levels_{label}")
         if kind == SUPPORT:
             points = [x0, y, x1, y]
             dash = (6, 4) if wavy else ()
@@ -1783,9 +2132,8 @@ class PyTradeViz:
         else:
             points = self.zigzag_points(x0, x1, y)
             dash = ()
-        item = self.canvas.create_line(
+        return self.canvas.create_line(
             *points, fill=color, width=2, dash=dash, joinstyle="round", tags=tags)
-        self._levels_items.append(item)
 
     def zigzag_points(self, x0: float, x1: float, y: float) -> List[float]:
         # Vertices sit on a fixed pixel grid so the zigzag does not shift when scrolling.
@@ -1823,11 +2171,313 @@ class PyTradeViz:
         return max(0, first), min(last_index, last)
 
     def draw_overlays(self) -> None:
+        self.thin_price_labels()
         self.draw_selection_box()
         self.draw_moving_averages()
         self.draw_bollinger()
         self.draw_levels()
+        self.draw_support_resistance()
+        self.draw_drawings()
+        self.draw_toolbox()
         self.draw_crosshair()
+
+    def refresh_drawing_layer(self) -> None:
+        self.draw_drawings()
+        self.draw_toolbox()
+
+    def drawing_points(self, drawing: Drawing) -> Tuple[Point, Point]:
+        return (
+            (self.candle_x(drawing.start[0]), self.price_to_y(drawing.start[1])),
+            (self.candle_x(drawing.end[0]), self.price_to_y(drawing.end[1])),
+        )
+
+    def chart_point(self, x: float, y: float) -> Point:
+        """Convert a canvas point to (candle position, price)."""
+        index = (x / self._scale_x - self.chart_padding_x) / self.chart_grid_divider_v
+        return index, self.price_at(y)
+
+    def make_drawing(self, drawing_id: int, start: Point, end: Point) -> Drawing:
+        """Build a drawing with the current tool and style from two canvas points."""
+        kind = self.draw_tool or LINE
+        return Drawing(
+            drawing_id, kind, self.draw_style, self.sma_colors[self.draw_color_name],
+            self.draw_filled and fill_applicable(kind),
+            self.chart_point(*start), self.chart_point(*end),
+        )
+
+    def drawing_at(self, x: float, y: float) -> Optional[Drawing]:
+        # The most recently drawn feature is on top, so it is hit first.
+        for drawing in reversed(self.drawings):
+            p1, p2 = self.drawing_points(drawing)
+            if hit_test(drawing.kind, p1, p2, x, y):
+                return drawing
+        return None
+
+    def draw_drawings(self) -> None:
+        self.canvas.delete("drawing")
+        for drawing in self.drawings:
+            self.render_drawing(drawing, selected=drawing.id == self._draw_selected)
+        gesture = self._draw_gesture
+        if gesture is not None and gesture["kind"] == "draw" and gesture["moved"]:
+            preview = self.make_drawing(0, gesture["start"], gesture["end"])
+            self.render_drawing(preview, selected=False)
+
+    def render_drawing(self, drawing: Drawing, selected: bool) -> None:
+        (x1, y1), (x2, y2) = self.drawing_points(drawing)
+        color = drawing.color
+        width = 4 if selected else 2
+        dash = STYLE_DASHES[drawing.style]
+        cap = "round" if drawing.style == DOTTED else "butt"
+        tags = ("drawing", f"drawing_{drawing.id}")
+        if drawing.kind == LINE:
+            clipped = clip_line((x1, y1), (x2, y2), self.canvas_view_bounds())
+            if clipped is None:
+                return
+            self.canvas.create_line(
+                *clipped, fill=color, width=width, dash=dash, capstyle=cap, tags=tags)
+        elif drawing.kind == SEGMENT:
+            self.canvas.create_line(
+                x1, y1, x2, y2, fill=color, width=width, dash=dash, capstyle=cap, tags=tags)
+            # Hollow circles at both ends, filled with the canvas colour so the line does not show through.
+            background = self.get_theme()["canvas"]
+            radius = SEGMENT_CIRCLE_RADIUS
+            for x, y in ((x1, y1), (x2, y2)):
+                self.canvas.create_oval(
+                    x - radius, y - radius, x + radius, y + radius,
+                    outline=color, fill=background, width=2, tags=tags)
+        else:
+            left, right = sorted((x1, x2))
+            top, bottom = sorted((y1, y2))
+            fill = color if drawing.filled else ""
+            stipple = FILL_STIPPLE if drawing.filled else ""
+            create = self.canvas.create_rectangle if drawing.kind == BOX else self.canvas.create_oval
+            create(left, top, right, bottom, outline=color, fill=fill, stipple=stipple,
+                   width=width, dash=dash, tags=tags)
+
+    def draw_toolbox(self) -> None:
+        self.canvas.delete("toolbox")
+        self._toolbox = None
+        if not self.draw_mode:
+            return
+        theme = self.get_theme()
+        toolbox = toolbox_layout(self.canvas_view_bounds(), tuple(self.sma_colors))
+        self._toolbox = toolbox
+        left, top, right, bottom = toolbox.bounds
+        self.canvas.create_rectangle(
+            left, top, right, bottom, fill=theme["canvas"], outline=theme["ink"],
+            tags=("toolbox",))
+        for button in toolbox.buttons:
+            enabled = self.toolbox_enabled(button.key)
+            active = enabled and self.toolbox_active(button.key)
+            if not enabled:
+                fill, text_fill = theme["sr_unavailable"], theme["ink"]
+            elif active:
+                fill, text_fill = theme["ink"], theme["canvas"]
+            else:
+                fill, text_fill = theme["canvas"], theme["ink"]
+            b_left, b_top, b_right, b_bottom = button.bounds
+            if button.key[0] == "color":
+                # A swatch shows its colour; the active one gets a heavier outline.
+                self.canvas.create_rectangle(
+                    b_left, b_top, b_right, b_bottom,
+                    fill=self.sma_colors[button.key[1]], outline=theme["ink"],
+                    width=3 if active else 1, tags=("toolbox",))
+                continue
+            self.canvas.create_rectangle(
+                b_left, b_top, b_right, b_bottom, fill=fill, outline=theme["ink"],
+                tags=("toolbox",))
+            self.canvas.create_text(
+                (b_left + b_right) / 2, (b_top + b_bottom) / 2, text=button.text,
+                fill=text_fill, tags=("toolbox",))
+
+    def toolbox_enabled(self, key: ToolKey) -> bool:
+        # The fill row only applies to box and ellipse.
+        return key[0] != "fill" or fill_applicable(self.draw_tool)
+
+    def toolbox_active(self, key: ToolKey) -> bool:
+        action, value = key
+        if action == "tool":
+            return self.draw_tool == value
+        if action == "style":
+            return self.draw_style == value
+        if action == "fill":
+            return self.draw_filled == value
+        if action == "color":
+            return self.draw_color_name == value
+        return False
+
+    def activate_draw_button(self, key: ToolKey) -> None:
+        action, value = key
+        if action == "tool":
+            # Clicking the active feature turns it off.
+            self.draw_tool = None if self.draw_tool == value else value
+        elif action == "style":
+            self.draw_style = value
+        elif action == "color":
+            self.draw_color_name = value
+        elif action == "fill" and self.toolbox_enabled(key):
+            self.draw_filled = value
+        elif action == "undo":
+            self.undo_drawing()
+        elif action == "delete":
+            self.delete_selected_drawing()
+        elif action == "clear":
+            self.clear_drawings()
+        self.refresh_drawing_layer()
+
+    def commit_drawings(self, drawings: Tuple[Drawing, ...]) -> None:
+        self._draw_history += (self.drawings,)
+        self.drawings = drawings
+        self.refresh_drawing_layer()
+
+    def undo_drawing(self) -> None:
+        if not self._draw_history:
+            return
+        self.drawings = self._draw_history[-1]
+        self._draw_history = self._draw_history[:-1]
+        if self._draw_selected not in {drawing.id for drawing in self.drawings}:
+            self._draw_selected = None
+        self.refresh_drawing_layer()
+
+    def delete_selected_drawing(self) -> None:
+        if self._draw_selected is None:
+            return
+        remaining = tuple(d for d in self.drawings if d.id != self._draw_selected)
+        self._draw_selected = None
+        if len(remaining) != len(self.drawings):
+            self.commit_drawings(remaining)
+
+    def clear_drawings(self) -> None:
+        if not self.drawings:
+            return
+        self._draw_selected = None
+        self.commit_drawings(())
+
+    def update_draw_cursor(self, event: tk.Event) -> None:
+        x = self.canvas.canvasx(event.x)
+        y = self.canvas.canvasy(event.y)
+        over_toolbox = self._toolbox is not None and self._toolbox.contains(x, y)
+        over_drawing = not over_toolbox and self.drawing_at(x, y) is not None
+        self.canvas.configure(cursor="fleur" if over_drawing else "")
+
+    def start_draw_gesture(self, event: tk.Event) -> bool:
+        """Start a toolbox press, a move, or a new drawing. Returns False to scroll instead."""
+        x = self.canvas.canvasx(event.x)
+        y = self.canvas.canvasy(event.y)
+        if self._toolbox is not None and self._toolbox.contains(x, y):
+            button = self._toolbox.button_at(x, y)
+            self._draw_gesture = {
+                "kind": "toolbox", "moved": False, "key": button.key if button else None,
+                "start": (x, y), "end": (x, y),
+            }
+            return True
+        hit = self.drawing_at(x, y)
+        if hit is not None:
+            self._draw_gesture = {
+                "kind": "move", "moved": False, "drawing": hit, "before": self.drawings,
+                "start": (x, y), "end": (x, y),
+            }
+            return True
+        if self.draw_tool is not None:
+            self._draw_gesture = {
+                "kind": "draw", "moved": False, "before": self.drawings,
+                "start": (x, y), "end": (x, y),
+            }
+            return True
+        return False
+
+    def continue_draw_gesture(self, event: tk.Event) -> bool:
+        gesture = self._draw_gesture
+        if gesture is None:
+            return False
+        if gesture["kind"] == "toolbox":
+            return True
+        if self.moved_past_click_threshold(event):
+            gesture["moved"] = True
+        x = self.canvas.canvasx(event.x)
+        y = self.canvas.canvasy(event.y)
+        gesture["end"] = (x, y)
+        if gesture["kind"] == "move" and gesture["moved"]:
+            # Move from the drawing's position when the gesture started, not from its last step.
+            start_index, start_price = self.chart_point(*gesture["start"])
+            end_index, end_price = self.chart_point(x, y)
+            moved = gesture["drawing"].translated(end_index - start_index, end_price - start_price)
+            self.drawings = tuple(
+                moved if d.id == moved.id else d for d in gesture["before"])
+        self.refresh_drawing_layer()
+        return True
+
+    def finish_draw_gesture(self, event: tk.Event) -> None:
+        gesture = self._draw_gesture
+        self._draw_gesture = None
+        if gesture is None:
+            # A plain click on empty chart in draw mode clears the selection.
+            if not self.moved_past_click_threshold(event):
+                self._draw_selected = None
+                self.refresh_drawing_layer()
+            return
+        x = self.canvas.canvasx(event.x)
+        y = self.canvas.canvasy(event.y)
+        kind = gesture["kind"]
+        if kind == "toolbox":
+            # Only a press and release on the same button activates it.
+            button = self._toolbox.button_at(x, y) if self._toolbox is not None else None
+            if button is not None and button.key == gesture["key"]:
+                self.activate_draw_button(button.key)
+            return
+        if kind == "move":
+            if gesture["moved"]:
+                self._draw_history += (gesture["before"],)
+            self._draw_selected = gesture["drawing"].id
+        elif kind == "draw":
+            self._draw_selected = None
+            if gesture["moved"]:
+                new_drawing = self.make_drawing(self._draw_next_id, gesture["start"], (x, y))
+                self._draw_next_id += 1
+                self.commit_drawings(gesture["before"] + (new_drawing,))
+                return
+        self.refresh_drawing_layer()
+
+    def draw_support_resistance(self) -> None:
+        for item in self._sr_items + self._sr_popup_items:
+            self.canvas.delete(item)
+        self._sr_items = ()
+        self._sr_popup_items = ()
+        if self._sr_levels is not None and self.price_data:
+            index, label = self._sr_levels
+            finder = self.levels_for_chart()[0]
+            start = finder.window_first(index, label)
+            color = self.sma_colors[self.sr_color_name]
+            items = []
+            for level in finder.levels_at(index, label):
+                item = self.level_line_item(
+                    start, index, level.price, level.kind, color, wavy=False,
+                    tags=("sr_levels", f"sr_levels_{label}"))
+                if item is not None:
+                    items.append(item)
+            self._sr_items = tuple(items)
+            if items:
+                self.canvas.tag_raise("sr_levels")
+        if self._sr_popups:
+            theme = self.get_theme()
+            items = []
+            for popup in self._sr_popups:
+                left, top, right, bottom = popup.bounds
+                # Unavailable windows get a dashed outline and a red tint, and do not respond to clicks.
+                if popup.enabled:
+                    box = self.canvas.create_rectangle(
+                        left, top, right, bottom, fill=theme["canvas"], outline=theme["ink"],
+                        tags=("sr_popup",))
+                else:
+                    box = self.canvas.create_rectangle(
+                        left, top, right, bottom, fill=theme["sr_unavailable"],
+                        outline=theme["ink"], dash=(3, 2), tags=("sr_popup",))
+                text = self.canvas.create_text(
+                    (left + right) / 2, (top + bottom) / 2, text=popup.label,
+                    fill=theme["ink"], tags=("sr_popup",))
+                items.extend((box, text))
+            self._sr_popup_items = tuple(items)
+            self.canvas.tag_raise("sr_popup")
 
     def candle_indices_in(self, x1: float, y1: float, x2: float, y2: float) -> Set[int]:
         indices: Set[int] = set()
@@ -2015,6 +2665,7 @@ class PyTradeViz:
         if scale_x == 1 and scale_y == 1:
             return
 
+        self.dismiss_sr_popups()
         horizontal_position = self.canvas.xview()[0]
         vertical_position = self.canvas.yview()[0]
 
@@ -2055,6 +2706,7 @@ class PyTradeViz:
         factor = new_scale / self.candle_height_scale
         if factor == 1:
             return "break"
+        self.dismiss_sr_popups()
 
         if event.widget is self.canvas:
             anchor_y = self.canvas.canvasy(event.y)
@@ -2092,6 +2744,7 @@ class PyTradeViz:
         if zoom_factor == 1:
             return "break"
 
+        self.dismiss_sr_popups()
         anchor_x = self.canvas.canvasx(self.canvas.winfo_width() / 2)
         anchor_y = self.canvas.canvasy(self.canvas.winfo_height() / 2)
 

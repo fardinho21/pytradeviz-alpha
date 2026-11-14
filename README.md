@@ -42,7 +42,7 @@ shows the average open, high, low, and close of the selection. Clicking a single
 candle selects only that candle, and clicking empty space clears the selection.
 Drag-panning is disabled while selection mode is on; the scrollbars and Ctrl
 zoom still work. Turning selection mode off clears the selection. Press Escape to leave select,
-ROI, or select-and-export mode.
+ROI, select-and-export, or support/resistance mode.
 The ROI button beside the candle-group button toggles ROI mode, which shows a
 "ROI mode enabled" label in place of the select-mode label. Click and drag across
 the chart, then release: the column between the press and release points is
@@ -61,6 +61,42 @@ selected candles. Each candle stores its open, high, low, close, RSI, the
 and lower bands. Labeled selections are kept in
 memory until *Close Data File* or the program exits. Opening a new data file
 keeps them.
+The button beside `{</>}`, labelled `S-R`, toggles support/resistance mode, which shows a
+"support/resistance mode" label. Click a candle to highlight it and show four popups
+beside the cursor, one per window: 1M, 2M, 3M, and 6M. Clicking a popup draws the
+support and resistance levels for that window, ending at the candle, as orange solid
+lines. A popup with too little data to draw any level has a dashed outline, a red tint,
+and does not respond to clicks. Clicking another candle shows new popups and keeps the
+levels already drawn. Clicking empty space, dragging, zooming, or resizing dismisses the
+popups. Escape clears the levels and leaves the mode. Dragging still scrolls the chart in
+this mode.
+The pencil button beside the light/dark mode toggle enters draw mode, which shows a
+"draw mode" label and opens a toolbox in the bottom-right corner of the chart. The toolbox
+has four rows of options. The first row selects the feature to draw: Line, Segment, Box,
+or Ellipse. Only one can be on at a time, and clicking the active feature turns it off. A
+Line spans the full width of the chart. A Segment has a hollow circle at each end. The
+second row chooses the style, Solid, Dashed, or Dotted, which is applied to each new
+drawing when it is made. The third row chooses Solid or Hollow fill. It only applies to
+Box and Ellipse, and is inert (tinted red) for other features. A solid fill is drawn
+translucent (a stipple pattern) so candles behind it stay visible. The fourth row is a
+row of colour swatches using the indicator colours. The active swatch has a thicker
+outline. Colour applies to new drawings only, and existing drawings keep their colour.
+The last row has Undo,
+Delete (removes the selected drawing), and Clear (removes all drawings). Drag on the chart
+with a feature selected to draw. Click a drawing to select it, then drag it to move it. Hovering
+over a drawing shows a move cursor. Drawings can only be moved in draw mode, and they stay
+fixed when you press Escape, which leaves the mode. Drawings are stored in candle and price
+units, so they stay in place when you zoom, scroll, or resize. Opening a new data file clears
+them. Drawings are not saved to disk.
+A row of tabs at the top right of the chart switches the time frame: Daily (the
+loaded candles), 2W, 1M, 2M, 3M, and 6M. Weekly tabs group ISO week pairs and monthly
+tabs group calendar months, each candle taking the first open, highest high, lowest low,
+and last close of its days. Each tab keeps its own drawings, indicator settings, zoom,
+candle height, and scroll position, and RSI and the price axis follow the tab's candles.
+A tab starts from the indicator settings in use when you first open it. Switching tabs
+leaves select, ROI, export, support/resistance, and draw modes. Monthly tabs label the
+dates by month and year only. Labeled selections and exports made on a non-daily tab
+use that tab's aggregated candles.
 The menu bar has four menus:
 
 - **File**: *Open Data File* loads a CSV file as described above, replacing any
@@ -113,11 +149,11 @@ bands are shown, the price scale grows to include them and shrinks back when the
 are hidden.
 
 The Support and Resistance window draws horizontal price levels found from pivots
-(local highs and lows) in five look-back windows: 2 weeks, 1 month, 2 months,
-3 months, and 6 months, counted back from the latest candle in calendar time.
+(local highs and lows) in four look-back windows: 1 month, 2 months, 3 months,
+and 6 months, counted back from the latest candle in calendar time.
 Each window has its own *Show* checkbox, *Color*, and *Style*. The window
-defaults are Red (2W), Blue (1M), Orange (2M), Green (3M), and Violet (6M),
-and all five start hidden. The styles are:
+defaults are Blue (1M), Orange (2M), Green (3M), and Violet (6M),
+and all four start hidden. The styles are:
 
 - *Triangles*: a marker on each visible candle the level spans, a solid upward
   triangle for support and a hollow downward triangle for resistance.
@@ -173,5 +209,8 @@ on less data.
 
 The window can be resized or maximized.
 
-Run the tests with `python3 -m unittest discover -s tests -v`. Tk integration
-tests require a graphical display.
+Run the tests with `python3 tests/run_tests.py`. It runs each test module in its
+own process, several at a time, and prints one line per module. Pass module names
+(for example `python3 tests/run_tests.py test_zoom`) to run a subset, or `-j N` to
+set the number of workers. Tk integration tests require a graphical display.
+`python3 -m unittest discover -s tests -v` still runs everything in one process.

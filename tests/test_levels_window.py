@@ -97,7 +97,7 @@ class LevelsWindowTests(unittest.TestCase):
     def test_nothing_is_drawn_until_a_window_is_shown(self) -> None:
         window = self.open_levels_window()
         self.apply(window)
-        for label in ("2W", "1M", "2M", "3M", "6M"):
+        for label in ("1M", "2M", "3M", "6M"):
             self.assertEqual(self.level_items(label), [], label)
 
     def test_apply_draws_the_chosen_window_in_its_color(self) -> None:
@@ -111,7 +111,6 @@ class LevelsWindowTests(unittest.TestCase):
             self.assertEqual(self.viz.canvas.type(item), "polygon")
             self.assertEqual(self.viz.canvas.itemcget(item, "outline"), color)
             self.assertEqual(self.viz.canvas.itemcget(item, "dash"), "")
-        self.assertEqual(self.level_items("2W"), [])
 
     def test_support_markers_are_solid_and_point_up(self) -> None:
         self.open_levels_window()
@@ -343,7 +342,7 @@ class LevelsWindowTests(unittest.TestCase):
         (text_widget,) = self.descendants(help_window, tk.Text)
         content = text_widget.get("1.0", "end")
         for term in ("Pivot bars", "Cluster width", "Min touches", "Causal", "Static",
-                     "Triangles", "Lines", "Wavy", "Show", "Color", "2W", "6M",
+                     "Triangles", "Lines", "Wavy", "Show", "Color", "1M", "6M",
                      "Horizon", "Rejection", "1 ATR", "2%", "too few", "Apply"):
             self.assertIn(term, content)
 

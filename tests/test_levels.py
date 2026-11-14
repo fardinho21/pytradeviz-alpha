@@ -44,7 +44,6 @@ class ShiftMonthsTests(unittest.TestCase):
 
     def test_window_lookbacks(self):
         end = dt.date(2024, 6, 30)
-        self.assertEqual(window_start(end, "2W"), dt.date(2024, 6, 16))
         self.assertEqual(window_start(end, "1M"), dt.date(2024, 5, 30))
         self.assertEqual(window_start(end, "6M"), dt.date(2023, 12, 30))
 
@@ -108,18 +107,18 @@ class LevelFinderTests(unittest.TestCase):
 
     def test_window_excludes_pivots_older_than_its_lookback(self):
         # The pivots at 100 are in January. Twenty flat candles from 1 March put the end
-        # of the data well past a 2W lookback, but still inside 3M.
+        # of the data well past a 1M lookback, but still inside 3M.
         flat = make_rows([(111, 109, 110)] * 20, start=dt.date(2024, 3, 1))
         finder = LevelFinder(self.rows + flat, self.settings)
         last = len(self.rows) + len(flat) - 1
-        self.assertEqual(finder.levels_at(last, "2W"), [])
+        self.assertEqual(finder.levels_at(last, "1M"), [])
         self.assertIn(Level(100, 2, SUPPORT), finder.levels_at(last, "3M"))
 
     def test_levels_for_a_candle_ignore_later_candles(self):
         rows = random_walk_rows(150, seed=7)
         settings = LevelSettings(pivot_bars=2, width_pct=1.0, min_touches=2)
         full = LevelFinder(rows, settings)
-        for label in ("2W", "1M", "3M"):
+        for label in ("1M", "3M"):
             for index in range(0, len(rows), 7):
                 prefix = LevelFinder(rows[:index + 1], settings)
                 self.assertEqual(
@@ -130,7 +129,7 @@ class LevelFinderTests(unittest.TestCase):
     def test_no_more_than_two_levels_per_side_on_any_candle(self):
         rows = random_walk_rows(300, seed=5)
         finder = LevelFinder(rows, LevelSettings(pivot_bars=2, width_pct=1.0, min_touches=2))
-        for label in ("2W", "1M", "2M", "3M", "6M"):
+        for label in ("1M", "2M", "3M", "6M"):
             per_side = {SUPPORT: [0] * len(rows), RESISTANCE: [0] * len(rows)}
             for segment in finder.segments(label):
                 for index in range(segment.start, segment.end + 1):
@@ -141,7 +140,7 @@ class LevelFinderTests(unittest.TestCase):
     def test_segments_are_well_formed(self):
         rows = random_walk_rows(150, seed=11)
         finder = LevelFinder(rows, LevelSettings(pivot_bars=2, width_pct=1.0, min_touches=2))
-        for label in ("2W", "1M", "2M", "3M", "6M"):
+        for label in ("1M", "2M", "3M", "6M"):
             for segment in finder.segments(label):
                 self.assertLessEqual(segment.start, segment.end)
                 self.assertTrue(0 <= segment.start and segment.end < len(rows))

@@ -23,7 +23,6 @@ MAX_LEVELS_PER_SIDE = 2
 
 # Lookback for each window label, as (months, days) measured back from the latest candle.
 WINDOW_LOOKBACKS: Dict[str, Tuple[int, int]] = {
-    "2W": (0, 14),
     "1M": (1, 0),
     "2M": (2, 0),
     "3M": (3, 0),
@@ -127,8 +126,14 @@ def cluster_prices(prices: Sequence[float], width: float) -> List[Tuple[float, i
 
 def candidate_levels(prices: Sequence[float], close: float, settings: LevelSettings) -> List[Level]:
     """Every cluster with enough touches, classed as support or resistance against ``close``."""
+    return _classify_clusters(cluster_prices(prices, settings.width_pct / 100), close, settings)
+
+
+def _classify_clusters(
+    clusters: Sequence[Tuple[float, int]], close: float, settings: LevelSettings,
+) -> List[Level]:
     levels: List[Level] = []
-    for price, touches in cluster_prices(prices, settings.width_pct / 100):
+    for price, touches in clusters:
         if touches < settings.min_touches or price == close:
             continue
         levels.append(Level(price, touches, SUPPORT if price < close else RESISTANCE))
@@ -159,6 +164,10 @@ class LevelFinder:
             settings.pivot_bars,
         )
         self._pivot_indices = [pivot.index for pivot in self._pivots]
+        # Clusters depend only on the pivot slice, so candles whose windows hold the
+        # same pivots share one clustering pass.
+        self._cluster_cache: Dict[Tuple[int, int], List[Tuple[float, int]]] = {}
+        self._track_cache: Dict[str, List[Track]] = {}
 
     def pivot_count(self, index: int, label: str) -> int:
         """Number of confirmed pivots inside the window that ends at candle ``index``."""
@@ -170,8 +179,16 @@ class LevelFinder:
         if not 0 <= index < self.count:
             return []
         first, last = self._pivot_range(index, label)
-        prices = [pivot.price for pivot in self._pivots[first:last]]
-        return candidate_levels(prices, self._closes[index], self.settings)
+        return _classify_clusters(self._clusters(first, last), self._closes[index], self.settings)
+
+    def _clusters(self, first: int, last: int) -> List[Tuple[float, int]]:
+        key = (first, last)
+        clusters = self._cluster_cache.get(key)
+        if clusters is None:
+            prices = [pivot.price for pivot in self._pivots[first:last]]
+            clusters = cluster_prices(prices, self.settings.width_pct / 100)
+            self._cluster_cache[key] = clusters
+        return clusters
 
     def levels_at(self, index: int, label: str) -> List[Level]:
         """Levels to show at candle ``index``: the nearest two per side, using only past data."""
@@ -192,19 +209,19 @@ class LevelFinder:
         so a level does not flicker off and back on as price moves.
         """
         tracks = self.tracks(label)
+        alive: List[List[int]] = [[] for _ in range(self.count)]
+        for position, track in enumerate(tracks):
+            for index in range(track.start, track.end + 1):
+                alive[index].append(position)
         shown: List[set] = [set() for _ in range(self.count)]
         for index in range(self.count):
             close = self._closes[index]
-            alive = [
-                (position, track) for position, track in enumerate(tracks)
-                if track.start <= index <= track.end
-            ]
             for kind in (SUPPORT, RESISTANCE):
                 ranked = sorted(
-                    (item for item in alive if item[1].kind == kind),
-                    key=lambda item: abs(close - item[1].price),
+                    (position for position in alive[index] if tracks[position].kind == kind),
+                    key=lambda position: abs(close - tracks[position].price),
                 )
-                shown[index].update(position for position, _ in ranked[:MAX_LEVELS_PER_SIDE])
+                shown[index].update(ranked[:MAX_LEVELS_PER_SIDE])
 
         segments: List[Segment] = []
         for position, track in enumerate(tracks):
@@ -227,6 +244,11 @@ class LevelFinder:
 
     def tracks(self, label: str) -> List[Track]:
         """Follow each candidate level from its first candle until it is broken or lapses."""
+        if label not in self._track_cache:
+            self._track_cache[label] = self._build_tracks(label)
+        return list(self._track_cache[label])
+
+    def _build_tracks(self, label: str) -> List[Track]:
         if self.count == 0:
             return []
         tolerance = self.settings.width_pct / 100
@@ -255,6 +277,10 @@ class LevelFinder:
             track.end = self.count - 1
             finished.append(track)
         return finished
+
+    def window_first(self, index: int, label: str) -> int:
+        """Index of the first candle inside the window that ends at candle ``index``."""
+        return bisect_left(self._dates, window_start(self._dates[index], label))
 
     def _pivot_range(self, index: int, label: str) -> Tuple[int, int]:
         """Slice bounds of confirmed pivots (index <= ``index - pivot_bars``) in the window."""

@@ -30,6 +30,15 @@ class CanvasStub:
     def winfo_height(self) -> int:
         return self.height
 
+    def delete(self, *tags: str) -> None:
+        pass
+
+    def find_withtag(self, tag: str) -> Tuple[()]:
+        return ()
+
+    def itemconfigure(self, item: int, **options: str) -> None:
+        pass
+
     def canvasx(self, x: float) -> float:
         return self.left + x
 

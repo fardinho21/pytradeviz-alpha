@@ -32,8 +32,8 @@ LEVELS_HELP: Tuple[HelpSection, ...] = (
         "qualifying level below the close is support; one above it is resistance.",
     )),
     ("4. Time windows", (
-        "Each window (2W, 1M, 2M, 3M, 6M) uses only swing points from its lookback before "
-        "the candle being evaluated. 2W is 14 days; 1M to 6M are calendar months.",
+        "Each window (1M, 2M, 3M, 6M) uses only swing points from its lookback before "
+        "the candle being evaluated. Windows are measured in calendar months.",
         "Short windows react to recent price action. Long windows show older, slower "
         "levels. Windows are independent, so one price can appear in several of them.",
     )),

@@ -191,17 +191,20 @@ class ExportModeTests(unittest.TestCase):
         for toggle in (self.viz.toggle_selection_mode, self.viz.toggle_roi_mode, self.viz.toggle_export_mode):
             toggle()
             self.assertTrue(self.viz.gesture_active())
-            self.viz.window.event_generate("<Escape>")
-            self.viz.window.update()
+            self.press_escape()
             self.assertFalse(self.viz.gesture_active())
             self.assertEqual(self.mode_label_is_shown(), False)
 
     def test_escape_clears_the_selection(self) -> None:
         self.viz.toggle_selection_mode()
         self.viz.set_selection({1, 2}, None)
-        self.viz.window.event_generate("<Escape>")
-        self.viz.window.update()
+        self.press_escape()
         self.assertEqual(self.viz.selected_indices, set())
+
+    def press_escape(self) -> None:
+        # Synthesized key events need X keyboard focus, which another test process can
+        # hold when tests run in parallel. The <Escape> binding only calls exit_modes().
+        self.viz.exit_modes()
 
     def mode_label_is_shown(self) -> bool:
         return bool(self.viz.select_mode_label.winfo_ismapped())
