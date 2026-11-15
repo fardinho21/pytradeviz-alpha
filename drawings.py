@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
-from typing import Any, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Sequence, Tuple
 
 Bounds = Tuple[float, float, float, float]
 Point = Tuple[float, float]
@@ -18,7 +18,12 @@ LINE = "line"
 SEGMENT = "segment"
 BOX = "box"
 ELLIPSE = "ellipse"
+FIB = "fib"
 FILLABLE_KINDS = (BOX, ELLIPSE)
+
+# Retracement levels as fractions of the move from the start anchor to the end anchor.
+# 0 sits at the end anchor and 1 at the start anchor, as in common charting software.
+FIB_LEVELS = (0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0)
 
 SOLID = "solid"
 DASHED = "dashed"
@@ -102,6 +107,14 @@ def distance_to_segment(x: float, y: float, p1: Point, p2: Point) -> float:
     return math.hypot(x - (x1 + t * dx), y - (y1 + t * dy))
 
 
+def fib_level_ys(p1: Point, p2: Point) -> List[Tuple[float, float]]:
+    """(ratio, canvas y) for each retracement level of a Fib drawn from p1 to p2.
+
+    Price is linear in canvas y, so the levels are placed directly in canvas units.
+    """
+    return [(ratio, p2[1] + ratio * (p1[1] - p2[1])) for ratio in FIB_LEVELS]
+
+
 def hit_test(kind: str, p1: Point, p2: Point, x: float, y: float,
              tolerance: float = HIT_TOLERANCE) -> bool:
     """Whether canvas point (x, y) is on or inside a drawing with anchors p1 and p2."""
@@ -114,6 +127,9 @@ def hit_test(kind: str, p1: Point, p2: Point, x: float, y: float,
     if kind == SEGMENT:
         return distance_to_segment(x, y, p1, p2) <= tolerance
     left, right = sorted((p1[0], p2[0]))
+    if kind == FIB:
+        return (left - tolerance <= x <= right + tolerance
+                and any(abs(y - level_y) <= tolerance for _, level_y in fib_level_ys(p1, p2)))
     top, bottom = sorted((p1[1], p2[1]))
     if kind == BOX:
         return left - tolerance <= x <= right + tolerance and top - tolerance <= y <= bottom + tolerance
@@ -162,6 +178,7 @@ TOOLBOX_ROWS: Tuple[Tuple[Tuple[ToolKey, str], ...], ...] = (
         (("tool", SEGMENT), "Segment"),
         (("tool", BOX), "Box"),
         (("tool", ELLIPSE), "Ellipse"),
+        (("tool", FIB), "Fib"),
     ),
     (
         (("style", SOLID), "Solid"),

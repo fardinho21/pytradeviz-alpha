@@ -72,8 +72,14 @@ this mode.
 The pencil button beside the light/dark mode toggle enters draw mode, which shows a
 "draw mode" label and opens a toolbox in the bottom-right corner of the chart. The toolbox
 has four rows of options. The first row selects the feature to draw: Line, Segment, Box,
-or Ellipse. Only one can be on at a time, and clicking the active feature turns it off. A
-Line spans the full width of the chart. A Segment has a hollow circle at each end. The
+Ellipse, or Fib. Only one can be on at a time, and clicking the active feature turns it off. A
+Line spans the full width of the chart. A Segment has a hollow circle at each end. A Fib
+(Fibonacci retracement) is drawn by dragging from the start point to the end point. It
+draws horizontal lines at 0, 23.6, 38.2, 50, 61.8, 78.6, and 100% of the move, spanning
+the two anchors, each labelled with its percentage and price. The 0% line sits at the
+end point and the 100% line at the start point. The FIB button beside the pencil button
+enters draw mode with the Fib feature selected and shows a "fib mode" label. Clicking it
+again leaves draw mode. The
 second row chooses the style, Solid, Dashed, or Dotted, which is applied to each new
 drawing when it is made. The third row chooses Solid or Hollow fill. It only applies to
 Box and Ellipse, and is inert (tinted red) for other features. A solid fill is drawn
@@ -86,7 +92,9 @@ with a feature selected to draw. Click a drawing to select it, then drag it to m
 over a drawing shows a move cursor. Drawings can only be moved in draw mode, and they stay
 fixed when you press Escape, which leaves the mode. Drawings are stored in candle and price
 units, so they stay in place when you zoom, scroll, or resize. Opening a new data file clears
-them. Drawings are not saved to disk.
+them. Drawings, including Fib retracements, are stored per tab. A retracement appears only on
+the tab where it was drawn and is not carried over when you switch time frames.
+Drawings are not saved to disk.
 A row of tabs at the top right of the chart switches the time frame: Daily (the
 loaded candles), 2W, 1M, 2M, 3M, and 6M. Weekly tabs group ISO week pairs and monthly
 tabs group calendar months, each candle taking the first open, highest high, lowest low,
@@ -204,6 +212,12 @@ dashed horizontal line. Each level also has a dotted line of the same color at i
 rejection distance (1 ATR or 2% of the level's price, as set under *Breakout odds*),
 on the side price would bounce toward.
 
+Levels are always found from the daily data, so every tab (2W, 1M, 2M, 3M, 6M) shows
+the same levels, drawn on the candles they cover. Crowded same-side levels that sit
+within about one label height (14 px) of each other, and whose candle ranges touch or
+are adjacent, are drawn as one level at their touch-weighted average price, so zoomed-out
+charts do not stack many lines in one band.
+
 Lines are drawn only across the visible part of the level's span. A level is a cluster of pivot prices within a width
 of the price, and it needs at least *Min touches* pivots. Each window
 shows at most 2 support levels (below the close) and 2 resistance levels (above the
@@ -231,7 +245,8 @@ Breakout odds: the status line for each window adds, for each shown level, the
 historical chance that price breaks through it before it is rejected, in the form
 `S 99.12 38% n=24` (price, percent, and sample count). Two switches choose the rule:
 
-- *Horizon* (5 or 10 candles, default 10): how far ahead an outcome must be decided.
+- *Horizon* (5 or 10 daily candles, default 10): how far ahead an outcome must be
+  decided. It counts daily candles on every tab.
 - *Rejection* (1 ATR or 2%, default 1 ATR): how far price must move away from the
   level to count as a rejection. 1 ATR uses the 14-candle average true range at the
   level's first candle; 2% uses 2% of the level's price.

@@ -13,7 +13,7 @@ import calendar
 import datetime as dt
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from indicators import CLOSE_COLUMN, HIGH_COLUMN, LOW_COLUMN
 
@@ -315,3 +315,64 @@ def _closest_match(track: Track, levels: List[Level], tolerance: float) -> Level
         if level.kind == track.kind and distance <= best_distance:
             best, best_distance = level, distance
     return best
+
+
+# Same-side levels closer than this many pixels can be drawn as one level. It is about the
+# height of an odds label, so merged levels do not stack their labels on top of each other.
+MERGE_GAP_PX = 14.0
+# Levels this many candles apart or fewer in time are treated as one band.
+MERGE_TIME_GAP = 1
+
+
+def merge_crowded_segments(
+    segments: Sequence[Segment], y_of: Callable[[float], float],
+    min_gap: float = MERGE_GAP_PX, max_time_gap: int = MERGE_TIME_GAP,
+) -> List[Segment]:
+    """Average crowded same-side levels into one level each.
+
+    Two supports (or two resistances) are linked when their prices are within
+    ``min_gap`` pixels on screen and their candle ranges touch or are at most
+    ``max_time_gap`` candles apart. Linked levels form a group, and each group becomes one
+    segment spanning all its members, at their touch-weighted price. Its touches and origin
+    come from the strongest member.
+
+    Segment ``start`` and ``end`` are candle indexes of the tab shown; ``origin`` is a daily
+    index. The result does not depend on the visible range, so scrolling never changes which
+    levels are merged. A level with no crowded neighbour is returned unchanged.
+    """
+    count = len(segments)
+    ys = [y_of(segment.price) for segment in segments]
+    parent = list(range(count))
+
+    def find(position: int) -> int:
+        while parent[position] != position:
+            parent[position] = parent[parent[position]]
+            position = parent[position]
+        return position
+
+    for kind in (SUPPORT, RESISTANCE):
+        ordered = sorted((p for p in range(count) if segments[p].kind == kind), key=lambda p: ys[p])
+        for i, first in enumerate(ordered):
+            for second in ordered[i + 1:]:
+                if ys[second] - ys[first] >= min_gap:
+                    break
+                a, b = segments[first], segments[second]
+                if max(a.start, b.start) - min(a.end, b.end) <= max_time_gap:
+                    parent[find(second)] = find(first)
+
+    groups: Dict[int, List[Segment]] = {}
+    for position, segment in enumerate(segments):
+        groups.setdefault(find(position), []).append(segment)
+    merged = [_merge_group(members) for members in groups.values()]
+    return sorted(merged, key=lambda segment: (segment.start, segment.price))
+
+
+def _merge_group(members: List[Segment]) -> Segment:
+    if len(members) == 1:
+        return members[0]
+    weight = sum(m.touches for m in members)
+    price = sum(m.price * m.touches for m in members) / weight
+    strongest = min(members, key=lambda m: (-m.touches, m.origin))
+    return Segment(
+        min(m.start for m in members), max(m.end for m in members), price,
+        strongest.kind, strongest.origin, strongest.touches)

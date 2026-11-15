@@ -30,18 +30,21 @@ from indicators_help import (
 )
 from sr_popups import SRPopup, popup_bounds
 from drawings import (
-    BOX, DASHED, DOTTED, FILL_STIPPLE, LINE, SEGMENT, SEGMENT_CIRCLE_RADIUS, SOLID, STYLE_DASHES,
-    Drawing, Point, ToolKey, Toolbox, clip_line, fill_applicable, hit_test, toolbox_layout,
+    BOX, DASHED, DOTTED, FIB, FILL_STIPPLE, LINE, SEGMENT, SEGMENT_CIRCLE_RADIUS, SOLID,
+    STYLE_DASHES, Drawing, Point, ToolKey, Toolbox, clip_line, fib_level_ys, fill_applicable,
+    hit_test, toolbox_layout,
 )
 from levels import (
-    SUPPORT, WINDOW_LOOKBACKS, LevelFinder, LevelSettings, Segment,
+    SUPPORT, WINDOW_LOOKBACKS, LevelFinder, LevelSettings, Segment, merge_crowded_segments,
 )
 from labeled_selections import (
     EXPORT_DIRECTORY, MOVING_AVERAGE_FIELDS, Selections, export_path, merge_selections,
     read_selections, write_selections,
 )
 from paginated_price_data import PaginatedPriceData
-from timeframes import DAILY, TIMEFRAMES, shows_day_labels, timeframe_rows
+from timeframes import (
+    DAILY, TIMEFRAMES, candle_ids, candle_last_rows, shows_day_labels, timeframe_rows,
+)
 from trend import (
     DOWN, SIDEWAYS, TREND_SETTING_FIELDS, UP, default_trend_settings, layered_trend_details,
     validate_trend_settings,
@@ -316,6 +319,8 @@ class PyTradeViz:
             Tuple[int, LevelSettings], LevelFinder, Dict[str, List[Segment]],
             Dict[Tuple[str, int, str], BreakoutStudy],
         ]] = None
+        # Candle index of each daily row for the active tab, and the last daily row of each candle.
+        self._timeframe_map_cache: Optional[Tuple[Tuple[str, int], List[int], List[int]]] = None
 
         self.calculate_grid_space_x(price_data_object)
         self._base_chart_width = self.chart_grid_space_x
@@ -340,6 +345,7 @@ class PyTradeViz:
         self.initialize_dark_mode_button(ttk)
         self.initialize_select_mode_button(ttk, tk)
         self.initialize_draw_button(ttk, tk)
+        self.initialize_fib_button(ttk)
         self.initialize_timeframe_bar(ttk)
         self.initialize_select_mode_label(tk)
         # configure
@@ -564,6 +570,7 @@ class PyTradeViz:
         self._trend_cache = None
         self._levels_items = []
         self._levels_cache = None
+        self._timeframe_map_cache = None
 
         self.price_data_object = {"price_data": rows}
         self.price_data = rows
@@ -1144,10 +1151,10 @@ class PyTradeViz:
         self.draw_overlays()
 
     def levels_status_text(self, label: str) -> str:
-        if not self.price_data:
+        if not self._daily_rows:
             return "No price data loaded"
         finder, _, _ = self.levels_for_chart()
-        last = len(self.price_data) - 1
+        last = len(self._daily_rows) - 1
         if finder.pivot_count(last, label) == 0:
             return "No pivots in this window"
         levels = finder.levels_at(last, label)
@@ -1165,10 +1172,11 @@ class PyTradeViz:
 
     def levels_for_chart(self) -> Tuple[LevelFinder, Dict[str, List[Segment]],
                                         Dict[Tuple[str, int, str], BreakoutStudy]]:
+        """Levels come from the daily rows on every tab, so they do not depend on the tab shown."""
         settings = self.levels_applied["settings"]
-        key = (len(self.price_data or []), settings)
+        key = (len(self._daily_rows or []), settings)
         if self._levels_cache is None or self._levels_cache[0] != key:
-            self._levels_cache = (key, LevelFinder(self.price_data or [], settings), {}, {})
+            self._levels_cache = (key, LevelFinder(self._daily_rows or [], settings), {}, {})
         return self._levels_cache[1], self._levels_cache[2], self._levels_cache[3]
 
     def breakout_study(self, label: str) -> BreakoutStudy:
@@ -1178,8 +1186,24 @@ class PyTradeViz:
         rejection = self.levels_applied["rejection"]
         key = (label, horizon, rejection)
         if key not in studies:
-            studies[key] = BreakoutStudy(self.price_data or [], finder, label, horizon, rejection)
+            studies[key] = BreakoutStudy(self._daily_rows or [], finder, label, horizon, rejection)
         return studies[key]
+
+    def timeframe_map(self) -> Tuple[List[int], List[int]]:
+        """For the active tab: the candle of each daily row, and the last daily row of each candle."""
+        key = (self.active_timeframe, len(self._daily_rows or []))
+        if self._timeframe_map_cache is None or self._timeframe_map_cache[0] != key:
+            ids = candle_ids(self._daily_rows or [], self.active_timeframe)
+            self._timeframe_map_cache = (key, ids, candle_last_rows(ids))
+        return self._timeframe_map_cache[1], self._timeframe_map_cache[2]
+
+    def daily_index_for_candle(self, index: int) -> int:
+        """The daily row a candle of the active tab is judged by: the last one it contains.
+
+        Levels shown on a candle use only daily rows up to the candle's close.
+        """
+        _, last_rows = self.timeframe_map()
+        return last_rows[min(max(index, 0), len(last_rows) - 1)]
 
     def build_simple_moving_average_content(self, tk: ModuleType, window: Any) -> None:
         # Edits are staged in these variables and only applied by the Apply button.
@@ -1702,6 +1726,13 @@ class PyTradeViz:
         )
         self.draw_button.grid(row=0, column=1, sticky="nsw", padx=(4, 0))
 
+    def initialize_fib_button(self, ttk: ModuleType) -> None:
+        # Enters draw mode with the Fib tool selected. Sits right of the draw button.
+        self.fib_button = ttk.Button(
+            self.theme_button_frame, text="FIB", width=3, command=self.toggle_fib_mode,
+        )
+        self.fib_button.grid(row=0, column=2, sticky="nsw", padx=(2, 0))
+
     def initialize_select_mode_label(self, tk: ModuleType) -> None:
         theme = self.get_theme()
         self.select_mode_label = tk.Label(
@@ -1750,6 +1781,17 @@ class PyTradeViz:
         self.clear_gesture_state()
         self.update_mode_widgets()
 
+    def toggle_fib_mode(self) -> None:
+        """The FIB button is draw mode with the Fib tool. Pressing it again turns draw mode off."""
+        if self.draw_mode and self.draw_tool == FIB:
+            self.draw_mode = False
+        else:
+            self.draw_tool = FIB
+            self.draw_mode = True
+            self.selection_mode = self.roi_mode = self.export_mode = self.sr_mode = False
+        self.clear_gesture_state()
+        self.update_mode_widgets()
+
     def exit_modes(self) -> None:
         if not self.gesture_active():
             return
@@ -1792,6 +1834,8 @@ class PyTradeViz:
                 text = "select and export mode"
             elif self.sr_mode:
                 text = "support/resistance mode"
+            elif self.draw_mode and self.draw_tool == FIB:
+                text = "fib mode"
             elif self.draw_mode:
                 text = "draw mode"
             else:
@@ -1805,6 +1849,8 @@ class PyTradeViz:
         self.export_button.state(["pressed" if self.export_mode else "!pressed"])
         self.sr_button.state(["pressed" if self.sr_mode else "!pressed"])
         self.draw_button.state(["pressed" if self.draw_mode else "!pressed"])
+        self.fib_button.state(
+            ["pressed" if self.draw_mode and self.draw_tool == FIB else "!pressed"])
         if not self.draw_mode:
             self.canvas.configure(cursor="")
         self.draw_drawings()
@@ -2095,9 +2141,10 @@ class PyTradeViz:
 
     def show_sr_popups(self, index: int, x: float, y: float) -> None:
         finder = self.levels_for_chart()[0]
+        daily = self.daily_index_for_candle(index)
         boxes = popup_bounds(x, y, len(self.sr_window_labels), self.canvas_view_bounds())
         self._sr_popups = tuple(
-            SRPopup(label, bool(finder.levels_at(index, label)), box)
+            SRPopup(label, bool(finder.levels_at(daily, label)), box)
             for label, box in zip(self.sr_window_labels, boxes)
         )
         self._sr_popup_index = index
@@ -2520,7 +2567,8 @@ class PyTradeViz:
         if not self.price_data:
             return
         finder, segment_cache, _ = self.levels_for_chart()
-        last = len(self.price_data) - 1
+        candle_of_row, _ = self.timeframe_map()
+        last_daily = len(self._daily_rows) - 1
         static = self.levels_applied["mode"] == "Static"
         first_visible, last_visible = self.visible_candle_range()
         occupied_label_boxes: List[Tuple[int, int, int, int]] = []
@@ -2530,17 +2578,22 @@ class PyTradeViz:
             study = self.breakout_study(label)
             if static:
                 # Static levels have no qualification candle of their own, so they are
-                # priced as of the latest candle.
-                spans = [(0, last, level.price, level.kind, last, level.touches)
-                         for level in finder.static_levels(label)]
+                # priced as of the latest daily row.
+                daily_spans = [Segment(0, last_daily, level.price, level.kind,
+                                       last_daily, level.touches)
+                               for level in finder.static_levels(label)]
             else:
                 if label not in segment_cache:
                     segment_cache[label] = finder.segments(label)
-                spans = [(segment.start, segment.end, segment.price, segment.kind,
-                          segment.origin, segment.touches)
-                         for segment in segment_cache[label]]
+                daily_spans = segment_cache[label]
+            # Daily spans are moved onto this tab's candles, then crowded ones are averaged.
+            spans = [Segment(candle_of_row[span.start], candle_of_row[span.end], span.price,
+                             span.kind, span.origin, span.touches) for span in daily_spans]
+            spans = merge_crowded_segments(spans, self.price_to_y)
             color = self.sma_colors[settings["color"]]
-            for start, end, price, kind, origin, touches in spans:
+            for span in spans:
+                start, end, price, kind, origin, touches = (
+                    span.start, span.end, span.price, span.kind, span.origin, span.touches)
                 self.draw_level_line(start, end, price, kind, color, label)
                 distance = study.rejection_distance(origin, price)
                 if distance is not None:
@@ -2688,7 +2741,9 @@ class PyTradeViz:
         dash = STYLE_DASHES[drawing.style]
         cap = "round" if drawing.style == DOTTED else "butt"
         tags = ("drawing", f"drawing_{drawing.id}")
-        if drawing.kind == LINE:
+        if drawing.kind == FIB:
+            self.render_fib(drawing, (x1, y1), (x2, y2), width, dash, cap, tags)
+        elif drawing.kind == LINE:
             clipped = clip_line((x1, y1), (x2, y2), self.canvas_view_bounds())
             if clipped is None:
                 return
@@ -2712,6 +2767,26 @@ class PyTradeViz:
             create = self.canvas.create_rectangle if drawing.kind == BOX else self.canvas.create_oval
             create(left, top, right, bottom, outline=color, fill=fill, stipple=stipple,
                    width=width, dash=dash, tags=tags)
+
+    def render_fib(
+        self, drawing: Drawing, p1: Point, p2: Point, width: int, dash: Tuple[int, ...],
+        cap: str, tags: Tuple[str, ...],
+    ) -> None:
+        """A retracement: one horizontal line per level across the anchors, labelled at the right.
+
+        Each label gives the level's percentage and its price, which is interpolated from the
+        two anchor prices in the same way as the line's position.
+        """
+        left, right = sorted((p1[0], p2[0]))
+        start_price, end_price = drawing.start[1], drawing.end[1]
+        for ratio, level_y in fib_level_ys(p1, p2):
+            self.canvas.create_line(
+                left, level_y, right, level_y, fill=drawing.color, width=width,
+                dash=dash, capstyle=cap, tags=tags)
+            price = end_price - ratio * (end_price - start_price)
+            self.canvas.create_text(
+                right + 4, level_y, anchor="w", fill=drawing.color, tags=tags,
+                text=f"{ratio * 100:.1f}%  {price:.2f}")
 
     def draw_toolbox(self) -> None:
         self.canvas.delete("toolbox")
@@ -2905,10 +2980,12 @@ class PyTradeViz:
         if self._sr_levels is not None and self.price_data:
             index, label = self._sr_levels
             finder = self.levels_for_chart()[0]
-            start = finder.window_first(index, label)
+            candle_of_row, _ = self.timeframe_map()
+            daily = self.daily_index_for_candle(index)
+            start = candle_of_row[finder.window_first(daily, label)]
             color = self.sma_colors[self.sr_color_name]
             items = []
-            for level in finder.levels_at(index, label):
+            for level in finder.levels_at(daily, label):
                 item = self.level_line_item(
                     start, index, level.price, level.kind, color,
                     tags=("sr_levels", f"sr_levels_{label}"))

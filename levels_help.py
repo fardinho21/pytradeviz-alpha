@@ -36,6 +36,8 @@ LEVELS_HELP: Tuple[HelpSection, ...] = (
         "the candle being evaluated. Windows are measured in calendar months.",
         "Short windows react to recent price action. Long windows show older, slower "
         "levels. Windows are independent, so one price can appear in several of them.",
+        "Levels are always found from the daily data, on every tab. The tab changes only "
+        "how they are drawn: each daily level is shown on the candles it covers.",
     )),
     ("5. Nearest two per side", (
         "Each window shows at most two supports (the nearest below the close) and two "
@@ -63,6 +65,10 @@ LEVELS_HELP: Tuple[HelpSection, ...] = (
         "the move that counts as a rejection under Breakout odds, so price reaching the dotted "
         "line before closing through the level means a rejection. The Rejection setting decides "
         "whether it is 1 ATR or 2% of the level's price.",
+        "Crowded levels are merged. Same-side levels (supports or resistances) that sit "
+        "within about one label height on screen, and whose candle ranges touch or are "
+        "adjacent, are drawn as one level at their averaged price. This keeps zoomed-out "
+        "charts readable. Merging does not change when you scroll.",
         "Lines from different windows can overlap. Later windows are drawn on top.",
         "Show turns a window on or off. Color is set per window.",
     )),
@@ -78,8 +84,8 @@ LEVELS_HELP: Tuple[HelpSection, ...] = (
         "well-tested levels, so fewer are shown. Default 2; must be at least 1.",
     )),
     ("10. Breakout odds", (
-        "• Horizon (5 or 10 candles): how many candles after a level qualifies its outcome "
-        "is watched for. Default 10.",
+        "• Horizon (5 or 10 candles): how many daily candles after a level qualifies its "
+        "outcome is watched for, on every tab. Default 10.",
         "• Rejection: the move away from the level that counts as a rejection. 1 ATR uses "
         "the 14-candle average true range at the level's candle. 2% uses 2% of the level's "
         "price.",

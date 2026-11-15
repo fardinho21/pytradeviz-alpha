@@ -43,6 +43,30 @@ def shows_day_labels(label: str) -> bool:
     return label in (DAILY, "2W")
 
 
+def candle_ids(rows: Sequence[Row], label: str) -> List[int]:
+    """The candle of ``label`` that each daily row belongs to, as a candle index.
+
+    Candles are numbered in the order they first appear, which is the order
+    ``resample`` builds them in.
+    """
+    if label == DAILY:
+        return list(range(len(rows)))
+    key_for = BUCKET_KEYS[label]
+    numbers: Dict[Hashable, int] = {}
+    ids: List[int] = []
+    for row in rows:
+        ids.append(numbers.setdefault(key_for(row), len(numbers)))
+    return ids
+
+
+def candle_last_rows(ids: Sequence[int]) -> List[int]:
+    """For each candle, the index of the last daily row it contains."""
+    last: List[int] = [0] * (max(ids) + 1 if ids else 0)
+    for row_index, candle in enumerate(ids):
+        last[candle] = row_index
+    return last
+
+
 def resample(rows: Sequence[Row], label: str) -> List[Row]:
     """Aggregate chronological daily rows into the candles of one time frame.
 

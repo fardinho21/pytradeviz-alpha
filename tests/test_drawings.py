@@ -8,7 +8,7 @@ from drawings import (
     toolbox_layout, toolbox_rows,
 )
 
-VIEW = (0.0, 0.0, 400.0, 300.0)
+VIEW = (0.0, 0.0, 480.0, 300.0)
 COLORS = ("Red", "Blue", "Orange", "Green", "Violet")
 
 
@@ -18,7 +18,7 @@ class ClipLineTests(unittest.TestCase):
         self.assertEqual(clipped, (0.0, 0.0, 300.0, 300.0))
 
     def test_horizontal_line_spans_full_width(self) -> None:
-        self.assertEqual(clip_line((50.0, 120.0), (60.0, 120.0), VIEW), (0.0, 120.0, 400.0, 120.0))
+        self.assertEqual(clip_line((50.0, 120.0), (60.0, 120.0), VIEW), (0.0, 120.0, VIEW[2], 120.0))
 
     def test_vertical_line_spans_full_height(self) -> None:
         self.assertEqual(clip_line((90.0, -5.0), (90.0, 10.0), VIEW), (90.0, 0.0, 90.0, 300.0))
