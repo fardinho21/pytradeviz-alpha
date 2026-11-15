@@ -56,13 +56,14 @@ LEVELS_HELP: Tuple[HelpSection, ...] = (
         "broken or stops qualifying. It is drawn on each candle where it is one of the "
         "nearest two on its side, so it does not flicker on and off.",
     )),
-    ("8. Style (per window)", (
-        "• Triangles: a solid up-pointing triangle marks each candle where a support is "
-        "shown, and a hollow down-pointing triangle marks a resistance.",
-        "• Lines: support is a solid straight line; resistance is a solid zigzag.",
-        "• Wavy: support is a dashed straight line; resistance is a solid wave.",
-        "Markers from different windows can overlap. Later windows are drawn on top. "
-        "Lines or Wavy are often easier to read when several windows are shown.",
+    ("8. Lines (per window)", (
+        "• Support is a solid horizontal line. Resistance is a dashed horizontal line.",
+        "• A dotted line of the same color sits at the rejection distance from each level, "
+        "on the side price would bounce toward: above a support and below a resistance. It is "
+        "the move that counts as a rejection under Breakout odds, so price reaching the dotted "
+        "line before closing through the level means a rejection. The Rejection setting decides "
+        "whether it is 1 ATR or 2% of the level's price.",
+        "Lines from different windows can overlap. Later windows are drawn on top.",
         "Show turns a window on or off. Color is set per window.",
     )),
     ("9. Detection settings", (

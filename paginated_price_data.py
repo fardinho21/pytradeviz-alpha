@@ -3,7 +3,8 @@
 The header row is located by name: a record that names a date column (``date``
 or ``datetime``) and ``open``, ``high``, ``low`` and ``close``, matched without
 regard to case. The asset ticker is the first value of a ``symbol`` column, or else
-a lone record above the header that is not a URL. Other columns are ignored. Records may be in ascending or
+a lone record above the header that is not a URL. A ``volume`` column is kept when present
+(thousands separators are allowed) and stored as ``volume`` in each row's indicators dictionary; other columns are ignored. Records may be in ascending or
 descending order and must not repeat a timestamp. Dates may be written as
 ``YYYY-MM-DD``, ``YYYY-MM-DD HH:MM[:SS]`` (with a space or ``T`` separator) or
 ``YYYY/MM/DD``. OHLC values may carry a leading ``$``. When no header names the
@@ -36,6 +37,7 @@ DATE_FORMATS = (
     "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d",
 )
 OHLC_COLUMN_NAMES = ("open", "high", "low", "close")
+VOLUME_COLUMN_NAME = "volume"
 # Positional layout used when no header record names the columns.
 POSITIONAL_COLUMNS: Dict[str, int] = {"date": 1, "open": 3, "high": 4, "low": 5, "close": 6}
 HEADER_SEARCH_RECORDS = 10
@@ -53,6 +55,8 @@ def _named_columns(row: List[str]) -> Optional[Dict[str, int]]:
     columns.update({name: positions[name] for name in OHLC_COLUMN_NAMES})
     if "symbol" in positions:
         columns["symbol"] = positions["symbol"]
+    if VOLUME_COLUMN_NAME in positions:
+        columns[VOLUME_COLUMN_NAME] = positions[VOLUME_COLUMN_NAME]
     return columns
 
 
@@ -90,6 +94,14 @@ def _parse_date(row: List[str], line: int, column: int = 1) -> datetime:
 def _parse_price(text: str) -> float:
     """Convert an OHLC field to float, accepting a leading dollar sign."""
     return float(text.strip().replace("$", ""))
+
+
+def _parse_volume(text: str) -> float:
+    """Convert a volume field to a non-negative float, accepting thousands separators."""
+    value = float(text.strip().replace(",", ""))
+    if not isfinite(value) or value < 0:
+        raise ValueError("volume must be a finite, non-negative number")
+    return value
 
 
 class PaginatedPriceData:
@@ -131,6 +143,7 @@ class PaginatedPriceData:
                     leading = []
                 self._date_column = columns["date"]
                 self._ohlc_columns = tuple(columns[name] for name in OHLC_COLUMN_NAMES)
+                self._volume_column: Optional[int] = columns.get(VOLUME_COLUMN_NAME)
                 symbol_column = columns.get("symbol")
                 symbol: Optional[str] = None
                 while True:
@@ -166,6 +179,11 @@ class PaginatedPriceData:
     def ticker(self) -> Optional[str]:
         """The asset ticker named by the file, or None when the file names none."""
         return self._ticker
+
+    @property
+    def has_volume(self) -> bool:
+        """Whether the file has a volume column. When it does, each row's indicators dict holds ``volume``."""
+        return self._volume_column is not None
 
     @staticmethod
     def _find_named_header(
@@ -213,10 +231,18 @@ class PaginatedPriceData:
                         raise ValueError("non-finite price")
                 except ValueError as exc:
                     raise ValueError(f"CSV record ending on line {line}: invalid OHLC values") from exc
+                indicators: Dict[str, Any] = {"rsi": None, "ema": None, "sma": None}
+                if self._volume_column is not None:
+                    if len(row) <= self._volume_column:
+                        raise ValueError(f"CSV record ending on line {line}: missing volume")
+                    try:
+                        indicators["volume"] = _parse_volume(row[self._volume_column])
+                    except ValueError as exc:
+                        raise ValueError(f"CSV record ending on line {line}: invalid volume") from exc
                 page.append([
                     [f"{date.year:04d}", f"{date.month:02d}", f"{date.day:02d}"],
                     *prices,
-                    {"rsi": None, "ema": None, "sma": None},
+                    indicators,
                 ])
         self._cursor = end
         self._interval = interval

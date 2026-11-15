@@ -6,16 +6,18 @@ strategies back it and no other label ties it. Otherwise the label is MIXED. The
 number of votes behind the label is kept as a measure of conviction.
 
 ``rsi_adx_states`` is a separate hybrid labeler (ADX for strength, RSI for direction)
-and is not part of the consensus.
+and is not part of the consensus. ``layered_trend_states`` is a second, separate labeler:
+an ADX gate with hysteresis decides whether a trend exists, and the 7/30 SMA order
+gives its direction. Optionally, on-balance volume must agree with that direction.
 """
 
 from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from indicators import ADX_PERIOD, adx_components
+from indicators import ADX_PERIOD, adx_components, on_balance_volume, parse_setting_fields
 from levels import LevelSettings, swing_pivots
 
 UP = "UP"
@@ -39,6 +41,16 @@ ADX_THRESHOLD = 25
 # RSI (Wilder) period, and the midline that separates bullish from bearish momentum.
 RSI_PERIOD = 14
 RSI_MIDLINE = 50.0
+
+# Layered labeler: the ADX gate switches on at ADX_THRESHOLD and off below ADX_EXIT_THRESHOLD,
+# so a reading that hovers near one level does not flip the trend on and off.
+ADX_EXIT_THRESHOLD = 20
+# Direction comes from the fast SMA relative to the slow SMA, in candles.
+SMA_DIRECTION_FAST = 7
+SMA_DIRECTION_SLOW = 30
+# With volume included, on-balance volume must sit on the same side of its own SMA as the
+# trend direction; this is the number of candles in that SMA.
+OBV_SMA_PERIOD = 20
 
 Votes = Sequence[Optional[str]]
 
@@ -215,6 +227,147 @@ def rsi_adx_states(
         else:
             states[i] = UP if momentum > RSI_MIDLINE else DOWN
     return states
+
+
+def adx_gate_states(
+    adx_values: Sequence[Optional[float]],
+    enter: float = ADX_THRESHOLD, exit_level: float = ADX_EXIT_THRESHOLD,
+) -> List[Optional[bool]]:
+    """Whether a trend is on: True once ADX reaches ``enter``, False again below ``exit_level``."""
+    gate: List[Optional[bool]] = []
+    on = False
+    for adx in adx_values:
+        if adx is None:
+            gate.append(None)
+            continue
+        if not on and adx >= enter:
+            on = True
+        elif on and adx < exit_level:
+            on = False
+        gate.append(on)
+    return gate
+
+
+def sma_direction_states(
+    closes: Sequence[float], fast: int = SMA_DIRECTION_FAST, slow: int = SMA_DIRECTION_SLOW,
+) -> List[Optional[str]]:
+    """UP when the fast SMA is above the slow SMA, DOWN when below, SIDEWAYS when equal."""
+    fast_averages = _simple_moving_average(closes, fast)
+    slow_averages = _simple_moving_average(closes, slow)
+    states: List[Optional[str]] = []
+    for fast_value, slow_value in zip(fast_averages, slow_averages):
+        if fast_value is None or slow_value is None:
+            states.append(None)
+        elif fast_value > slow_value:
+            states.append(UP)
+        elif fast_value < slow_value:
+            states.append(DOWN)
+        else:
+            states.append(SIDEWAYS)
+    return states
+
+
+def obv_direction_states(
+    closes: Sequence[float], volumes: Sequence[float], period: int = OBV_SMA_PERIOD,
+) -> List[Optional[str]]:
+    """Volume's view of direction: UP when on-balance volume is above its own SMA, DOWN when below.
+
+    SIDEWAYS when they are equal. None until the SMA has enough candles.
+    """
+    obv = on_balance_volume(closes, volumes)
+    averages = _simple_moving_average(obv, period)
+    states: List[Optional[str]] = []
+    for value, average in zip(obv, averages):
+        if average is None:
+            states.append(None)
+        elif value > average:
+            states.append(UP)
+        elif value < average:
+            states.append(DOWN)
+        else:
+            states.append(SIDEWAYS)
+    return states
+
+
+# Settings the user can change in the Trend Identification window: (key, label, kind, low, high).
+TREND_SETTING_FIELDS: Tuple[Tuple[str, str, str, Optional[float], Optional[float]], ...] = (
+    ("adx_enter", "ADX entry level", "float", 0, 100),
+    ("adx_exit", "ADX exit level", "float", 0, 100),
+    ("sma_fast", "Fast SMA period (candles)", "int", 2, None),
+    ("sma_slow", "Slow SMA period (candles)", "int", 3, None),
+)
+
+
+def default_trend_settings() -> Dict[str, float]:
+    """The layered labeler's settings, using the module constants as defaults."""
+    return {
+        "adx_enter": ADX_THRESHOLD, "adx_exit": ADX_EXIT_THRESHOLD,
+        "sma_fast": SMA_DIRECTION_FAST, "sma_slow": SMA_DIRECTION_SLOW,
+    }
+
+
+def validate_trend_settings(raw: Dict[str, str]) -> Dict[str, Any]:
+    """Parse and check the text typed into the Trend Identification window.
+
+    Raises ValueError with a message the user can read when a value is missing, not a
+    number, out of range, when the exit level is above the entry level, or when the fast
+    SMA is not shorter than the slow SMA.
+    """
+    values = parse_setting_fields(TREND_SETTING_FIELDS, raw)
+    if values["adx_exit"] > values["adx_enter"]:
+        raise ValueError("ADX exit level must not be above the entry level.")
+    if values["sma_fast"] >= values["sma_slow"]:
+        raise ValueError("Fast SMA period must be shorter than the slow SMA period.")
+    return values
+
+
+def layered_trend_details(
+    highs: Sequence[float], lows: Sequence[float], closes: Sequence[float],
+    enter: float = ADX_THRESHOLD, exit_level: float = ADX_EXIT_THRESHOLD,
+    fast: int = SMA_DIRECTION_FAST, slow: int = SMA_DIRECTION_SLOW,
+    volumes: Optional[Sequence[float]] = None,
+) -> List[Tuple[Optional[str], Optional[float]]]:
+    """Layered trend for every candle, as (state, ADX) pairs.
+
+    The ADX gate decides whether a trend exists, and the fast/slow SMA order gives its
+    direction. While the gate is off the state is SIDEWAYS. A state is None until both
+    layers have warmed up. The ADX value is returned so it can be shown next to the state.
+
+    With ``volumes``, an UP or DOWN state is kept only when on-balance volume agrees with
+    it (see ``obv_direction_states``). Otherwise the candle is SIDEWAYS: the trend is not
+    confirmed by volume.
+    """
+    adx_values, _, _ = adx_components(highs, lows, closes, ADX_PERIOD)
+    gate = adx_gate_states(adx_values, enter, exit_level)
+    direction = sma_direction_states(closes, fast, slow)
+    confirmation = None if volumes is None else obv_direction_states(closes, volumes)
+    details: List[Tuple[Optional[str], Optional[float]]] = []
+    for index, (adx, trending, side) in enumerate(zip(adx_values, gate, direction)):
+        if trending is None or side is None:
+            state = None
+        elif not trending:
+            state = SIDEWAYS
+        else:
+            state = side
+        if confirmation is not None and state in (UP, DOWN):
+            volume_side = confirmation[index]
+            if volume_side is None:
+                state = None
+            elif volume_side != state:
+                state = SIDEWAYS
+        details.append((state, adx))
+    return details
+
+
+def layered_trend_states(
+    highs: Sequence[float], lows: Sequence[float], closes: Sequence[float],
+    enter: float = ADX_THRESHOLD, exit_level: float = ADX_EXIT_THRESHOLD,
+    fast: int = SMA_DIRECTION_FAST, slow: int = SMA_DIRECTION_SLOW,
+    volumes: Optional[Sequence[float]] = None,
+) -> List[Optional[str]]:
+    """The state of each candle from ``layered_trend_details``."""
+    return [state for state, _adx in layered_trend_details(
+        highs, lows, closes, enter, exit_level, fast, slow, volumes)]
 
 
 def consensus(votes: Votes) -> Optional[Consensus]:

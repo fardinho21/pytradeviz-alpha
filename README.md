@@ -96,7 +96,7 @@ A tab starts from the indicator settings in use when you first open it. Switchin
 leaves select, ROI, export, support/resistance, and draw modes. Monthly tabs label the
 dates by month and year only. Labeled selections and exports made on a non-daily tab
 use that tab's aggregated candles.
-The menu bar has four menus:
+The menu bar has five items:
 
 - **File**: *Open Data File* loads a CSV file as described above, replacing any
   data already shown. *Close Data File* clears the candles, RSI, price labels,
@@ -104,7 +104,8 @@ The menu bar has four menus:
   program.
 - **Indicators**: *Moving Averages* → *Simple* opens the simple moving average
   settings, and *Moving Averages* → *Exponential* opens an empty window for now.
-  *Bollinger* opens the Bollinger Bands window directly. *Support and Resistance*
+  *Bollinger* opens the Bollinger Bands window directly. *Trend Identification* opens the
+  trend settings described below. *Support and Resistance*
   opens the level settings described below. The next four items open a settings window for
   one indicator each: *Relative Strength Index (RSI)*, *Avg. Directional Index (ADX)*,
   *Stochastic Oscillator (STOSC)*, and *Williams %R (W%R)*.
@@ -127,6 +128,11 @@ The menu bar has four menus:
   or `.xml`. *Add To Existing...* opens a file dialog in `data/labeled_data` and
   merges the current selections into the chosen export, overwriting that file.
   *Clear* removes all labeled selections after you confirm. *Close* closes the window.
+- **Reset**: after you confirm, every indicator returns to its default settings (RSI, ADX,
+  STOSC, W%R, moving averages, Bollinger Bands, trend shading and support and resistance),
+  all drawings are cleared, and RSI is shown on the canvas. This applies to every timeframe
+  tab. The loaded data, zoom level, labeled selections and scroll position are kept.
+  *Cancel* closes the confirmation without changes.
 
 Export files use the layouts in `data/export-format.txt`, with these differences:
 the JSON is valid JSON (`{"label": {"label_candle_0": {...}}}`), the XML label is
@@ -166,17 +172,37 @@ nothing changes if one is invalid. The three bands are drawn as lines only, with
 bands are shown, the price scale grows to include them and shrinks back when they
 are hidden.
 
+The Trend Identification window turns on a background shading that labels each candle
+UP (green), DOWN (red) or SIDEWAYS (gray). A candle is SIDEWAYS while ADX is below the
+entry level of 25; once ADX reaches 25 the trend stays on until it falls below 20. While the
+trend is on, the 7-candle SMA above the 30-candle SMA means UP, and below means DOWN. The
+window has a *Show trend shading* checkbox, the four levels and periods (each shows its
+default), and **Cancel**, **Apply** and **Help** buttons. Apply checks the values first and
+rejects an exit level above the entry level, or a fast period that is not shorter than the
+slow one. The **TREND** box at the bottom left of the price chart switches the shading on and
+off, and it is kept for each timeframe tab. Hovering the crosshair over a candle shows its
+state and ADX value near the top of the chart. The labels use only past candles, and the
+ADX gate always uses the standard 14-candle ADX. The shading is a context aid, not a buy or
+sell signal.
+
+The *Include volume* checkbox in the same window is off by default. When it is checked and
+applied, a candle keeps its UP or DOWN label only if On-Balance Volume (OBV) agrees: OBV must
+be above its 20-candle SMA for UP and below it for DOWN. Otherwise the candle is labelled
+SIDEWAYS, meaning the trend is not confirmed by volume. The checkbox is disabled when the
+loaded data has no volume. Price files with a `Volume` column (for example the AMZN and
+APPL files in `data/`) load volume automatically, and the weekly and monthly tabs sum it per
+bucket. On a short backtest this filter increased label flips and did not show a consistent
+improvement in the next 10 candles, so treat it as an experiment.
+
 The Support and Resistance window draws horizontal price levels found from pivots
 (local highs and lows) in four look-back windows: 1 month, 2 months, 3 months,
 and 6 months, counted back from the latest candle in calendar time.
-Each window has its own *Show* checkbox, *Color*, and *Style*. The window
+Each window has its own *Show* checkbox and *Color*. The window
 defaults are Blue (1M), Orange (2M), Green (3M), and Violet (6M),
-and all four start hidden. The styles are:
-
-- *Triangles*: a marker on each visible candle the level spans, a solid upward
-  triangle for support and a hollow downward triangle for resistance.
-- *Lines*: a solid straight line for support and a solid zigzag line for resistance.
-- *Wavy*: a dashed straight line for support and a solid wavy line for resistance.
+and all four start hidden. Support is a solid horizontal line and resistance is a
+dashed horizontal line. Each level also has a dotted line of the same color at its
+rejection distance (1 ATR or 2% of the level's price, as set under *Breakout odds*),
+on the side price would bounce toward.
 
 Lines are drawn only across the visible part of the level's span. A level is a cluster of pivot prices within a width
 of the price, and it needs at least *Min touches* pivots. Each window

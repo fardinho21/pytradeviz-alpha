@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime
-from typing import Callable, Dict, Hashable, List, Sequence, Tuple
+from typing import Any, Callable, Dict, Hashable, List, Sequence, Tuple
 
 DAILY = "Daily"
 TIMEFRAMES: Tuple[str, ...] = (DAILY, "2W", "1M", "2M", "3M", "6M")
@@ -47,7 +47,8 @@ def resample(rows: Sequence[Row], label: str) -> List[Row]:
     """Aggregate chronological daily rows into the candles of one time frame.
 
     Each bucket keeps the first open, highest high, lowest low, last close and the
-    date of its first day. Daily returns the rows unchanged.
+    date of its first day. When the rows carry a volume, the bucket's volume is their sum.
+    Daily returns the rows unchanged.
     """
     if label == DAILY:
         return rows if isinstance(rows, list) else list(rows)
@@ -57,13 +58,16 @@ def resample(rows: Sequence[Row], label: str) -> List[Row]:
         buckets.setdefault(key_for(row), []).append(row)
     candles: List[Row] = []
     for bucket in buckets.values():
+        indicators: Dict[str, Any] = {"rsi": None, "ema": None, "sma": None}
+        if "volume" in bucket[0][5]:
+            indicators["volume"] = sum(row[5]["volume"] for row in bucket)
         candles.append([
             list(bucket[0][0]),
             bucket[0][1],
             max(row[2] for row in bucket),
             min(row[3] for row in bucket),
             bucket[-1][4],
-            {"rsi": None, "ema": None, "sma": None},
+            indicators,
         ])
     return candles
 

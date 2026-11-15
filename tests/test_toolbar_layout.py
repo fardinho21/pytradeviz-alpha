@@ -61,7 +61,7 @@ class ToolbarLayoutTests(unittest.TestCase):
 
     def test_menu_bar_structure(self) -> None:
         menu_bar = self.viz.window.nametowidget(self.viz.window.cget("menu"))
-        self.assertEqual(self.menu_labels(menu_bar), ["File", "Indicators", "Strategies", "Data"])
+        self.assertEqual(self.menu_labels(menu_bar), ["File", "Indicators", "Strategies", "Data", "Reset"])
         indicators = menu_bar.nametowidget(menu_bar.entrycget(1, "menu"))
         self.assertEqual(self.menu_labels(indicators), [
             "Moving Averages",
@@ -70,6 +70,7 @@ class ToolbarLayoutTests(unittest.TestCase):
             "Stochastic Oscillator (STOSC)",
             "Williams %R (W%R)",
             "Bollinger",
+            "Trend Identification",
             "Support and Resistance",
         ])
         moving_averages = indicators.nametowidget(indicators.entrycget(0, "menu"))

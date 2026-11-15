@@ -11,7 +11,8 @@ from tkinter import ttk
 from types import SimpleNamespace
 from typing import List, Tuple
 
-from levels import window_start
+from drawings import DASHED, STYLE_DASHES
+from levels import SUPPORT, window_start
 from pytradeviz import PyTradeViz
 from sr_popups import POPUP_HEIGHT, POPUP_WIDTH, SRPopup, popup_bounds
 from test_roi import load_price_rows
@@ -170,7 +171,7 @@ class SupportResistanceModeTests(unittest.TestCase):
         self.assertIsNone(self.viz._sr_levels)
         self.assertEqual(len(self.viz._sr_popups), 4)
 
-    def test_enabled_popup_click_draws_orange_solid_levels(self) -> None:
+    def test_enabled_popup_click_draws_orange_levels_by_kind(self) -> None:
         self.enter_mode()
         index, enabled, _ = self.mixed_index()
         self.click_candle(index)
@@ -185,9 +186,11 @@ class SupportResistanceModeTests(unittest.TestCase):
         expected = finder.levels_at(index, label)
         self.assertEqual(len(self.viz._sr_items), len(expected))
         orange = self.viz.sma_colors["Orange"]
-        for item in self.viz._sr_items:
+        dashed = " ".join(str(v) for v in STYLE_DASHES[DASHED])
+        for item, level in zip(self.viz._sr_items, expected):
             self.assertEqual(self.viz.canvas.itemcget(item, "fill"), orange)
-            self.assertEqual(self.viz.canvas.itemcget(item, "dash"), "")
+            wanted = "" if level.kind == SUPPORT else dashed
+            self.assertEqual(self.viz.canvas.itemcget(item, "dash"), wanted)
             self.assertIn("sr_levels", self.viz.canvas.gettags(item))
 
     def test_escape_clears_levels_and_exits_mode(self) -> None:

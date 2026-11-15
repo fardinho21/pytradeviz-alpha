@@ -101,9 +101,12 @@ class ZoomTests(unittest.TestCase):
         self.viz.levels_applied = {"mode": "Causal", "settings": LevelSettings(), "windows": {}}
         self.viz._levels_items = []
         self.viz._levels_cache = None
+        self.viz.trend_applied = {"enabled": False}
+        self.viz._trend_items = []
         # Toggle and Info boxes need a real Tk window; zoom tests only check scrolling.
         self.viz.draw_indicator_toggles = lambda: None
         self.viz.draw_indicator_info_button = lambda: None
+        self.viz.draw_trend_toggle = lambda: None
 
     def zoom(
         self, delta: int, widget: Optional[object] = None,

@@ -16,7 +16,8 @@ import datetime as datetime
 import math
 from indicators import (
     BOLLINGER_MULTIPLIER, BOLLINGER_PERIOD, BOLLINGER_SETTING_FIELDS, INDICATOR_SETTING_FIELDS,
-    Indicators, SMA_PERIODS, HIGH_COLUMN, LOW_COLUMN, WILLIAMS_R_CANVAS_OFFSET, band_intersects,
+    CLOSE_COLUMN, Indicators, SMA_PERIODS, HIGH_COLUMN, LOW_COLUMN, WILLIAMS_R_CANVAS_OFFSET,
+    band_intersects,
     default_indicator_settings, rsi_crosses_level, validate_bollinger_settings,
     validate_indicator_settings,
 )
@@ -24,14 +25,16 @@ from breakout import (
     ATR_REJECTION, HORIZONS, REJECTION_RULES, BreakoutStudy, Odds,
 )
 from levels_help import LEVELS_HELP
-from indicators_help import BOLLINGER_DETAILED_HELP, INDICATOR_DETAILED_HELP, INDICATOR_HELP
+from indicators_help import (
+    BOLLINGER_DETAILED_HELP, INDICATOR_DETAILED_HELP, INDICATOR_HELP, TREND_DETAILED_HELP,
+)
 from sr_popups import SRPopup, popup_bounds
 from drawings import (
-    BOX, DOTTED, FILL_STIPPLE, LINE, SEGMENT, SEGMENT_CIRCLE_RADIUS, SOLID, STYLE_DASHES,
+    BOX, DASHED, DOTTED, FILL_STIPPLE, LINE, SEGMENT, SEGMENT_CIRCLE_RADIUS, SOLID, STYLE_DASHES,
     Drawing, Point, ToolKey, Toolbox, clip_line, fill_applicable, hit_test, toolbox_layout,
 )
 from levels import (
-    RESISTANCE, SUPPORT, WINDOW_LOOKBACKS, LevelFinder, LevelSettings, Segment,
+    SUPPORT, WINDOW_LOOKBACKS, LevelFinder, LevelSettings, Segment,
 )
 from labeled_selections import (
     EXPORT_DIRECTORY, MOVING_AVERAGE_FIELDS, Selections, export_path, merge_selections,
@@ -39,6 +42,10 @@ from labeled_selections import (
 )
 from paginated_price_data import PaginatedPriceData
 from timeframes import DAILY, TIMEFRAMES, shows_day_labels, timeframe_rows
+from trend import (
+    DOWN, SIDEWAYS, TREND_SETTING_FIELDS, UP, default_trend_settings, layered_trend_details,
+    validate_trend_settings,
+)
 
 DATA_DIRECTORY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
@@ -67,6 +74,10 @@ INDICATOR_TOGGLE_GAP = 4
 # The Info box sits at the right edge of the same row and opens the indicator help window.
 INDICATOR_INFO_LABEL = "Info"
 INDICATOR_INFO_WIDTH = 44
+# The TREND box sits at the bottom left of the price chart and uses the same box size as the toggles.
+TREND_TOGGLE_LABEL = "TREND"
+# How strong the trend shading is: 0 is invisible and 1 is the full gain or loss colour.
+TREND_SHADE_STRENGTH = 0.15
 
 
 def odds_text(odds: Optional[Odds]) -> str:
@@ -88,6 +99,11 @@ class PriceDataSource(Protocol):
     def load_next(self) -> List[List[Any]]: ...
 
 
+def default_trend_applied() -> Dict[str, Any]:
+    """Trend shading starts off, with the labeler's default settings and volume left out."""
+    return {"enabled": False, "include_volume": False, **default_trend_settings()}
+
+
 @dataclasses.dataclass
 class ChartTabState:
     """What a time-frame tab remembers while another tab is shown."""
@@ -95,6 +111,7 @@ class ChartTabState:
     draw_history: Tuple[Tuple[Drawing, ...], ...] = ()
     sma_applied: Dict[int, Dict[str, Any]] = dataclasses.field(default_factory=dict)
     bollinger_applied: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    trend_applied: Dict[str, Any] = dataclasses.field(default_factory=default_trend_applied)
     levels_applied: Dict[str, Any] = dataclasses.field(default_factory=dict)
     indicator_settings: Dict[str, Dict[str, Any]] = dataclasses.field(
         default_factory=default_indicator_settings)
@@ -141,15 +158,6 @@ class PyTradeViz:
     levels_default_colors: Dict[str, str] = {
         "1M": "Blue", "2M": "Orange", "3M": "Green", "6M": "Violet",
     }
-    # Half the width and height of a level marker triangle, in pixels.
-    levels_marker_radius: int = 5
-    levels_styles: Tuple[str, ...] = ("Triangles", "Lines", "Wavy")
-    levels_default_style: str = "Triangles"
-    # Zigzag and wave geometry for resistance levels, in canvas pixels.
-    levels_zigzag_step: float = 6.0
-    levels_zigzag_amplitude: float = 3.0
-    levels_wave_period: float = 16.0
-    levels_wave_amplitude: float = 3.0
     dark_mode: bool = False
     crosshair_root: Optional[Tuple[int, int]] = None
     price_limit: int = 3000
@@ -290,33 +298,17 @@ class PyTradeViz:
         self.indicators_object.set_price_data(self.price_data)
         self.indicators_object.calculate_RSI_incremental(self.indicator_settings["RSI"]["period"])
         # Applied simple moving average settings, keyed by period.
-        self.sma_applied: Dict[int, Dict[str, Any]] = {
-            period: {"enabled": False, "hi_lo": False, "style": "Solid",
-                     "color": self.sma_default_colors[period]}
-            for period in SMA_PERIODS
-        }
+        self.sma_applied: Dict[int, Dict[str, Any]] = self.default_sma_applied()
         self._sma_items: List[int] = []
         # Bollinger Bands settings. The period and multiplier are kept per tab, like the indicator settings.
-        self.bollinger_applied: Dict[str, Any] = {
-            "enabled": False, "style": "Solid", "color": "Green",
-            "period": BOLLINGER_PERIOD, "multiplier": BOLLINGER_MULTIPLIER,
-        }
+        self.bollinger_applied: Dict[str, Any] = self.default_bollinger_applied()
         self._bollinger_items: List[int] = []
+        # Trend shading settings, kept per tab like the others.
+        self.trend_applied: Dict[str, Any] = default_trend_applied()
+        self._trend_items: List[int] = []
+        self._trend_cache: Optional[Tuple[Tuple[Any, ...], List[Tuple[Optional[str], Optional[float]]]]] = None
         # Support and resistance settings. Each window label has its own display settings.
-        self.levels_applied: Dict[str, Any] = {
-            "mode": "Causal",
-            "settings": LevelSettings(),
-            "horizon": HORIZONS[-1],
-            "rejection": ATR_REJECTION,
-            "windows": {
-                label: {
-                    "enabled": False,
-                    "color": self.levels_default_colors[label],
-                    "style": self.levels_default_style,
-                }
-                for label in WINDOW_LOOKBACKS
-            },
-        }
+        self.levels_applied: Dict[str, Any] = self.default_levels_applied()
         self._levels_items: List[int] = []
         # Finder, per-window segments and breakout studies, rebuilt when the rows or
         # level settings change. Studies are keyed by (window, horizon, rejection).
@@ -339,6 +331,7 @@ class PyTradeViz:
         # set up canvas
         self.initialize_canvases(tk)
         self.initialize_candle_info(tk)
+        self.initialize_trend_toggle(tk)
         self.initialize_no_data_label(tk)
         self.initialize_ticker_label(tk)
 
@@ -396,6 +389,7 @@ class PyTradeViz:
         self.menu_bar.add_cascade(label="Indicators", menu=self.initialize_indicators_menu(tk))
         self.menu_bar.add_command(label="Strategies", command=self.open_strategies)
         self.menu_bar.add_command(label="Data", command=lambda: self.open_data_window(tk))
+        self.menu_bar.add_command(label="Reset", command=lambda: self.open_reset_window(tk))
         self.window.configure(menu=self.menu_bar)
 
     def initialize_file_menu(self, tk: ModuleType) -> Any:
@@ -440,11 +434,75 @@ class PyTradeViz:
         self._tab_states[DAILY] = state
         self.build_chart(rows, state)
 
+    def default_sma_applied(self) -> Dict[int, Dict[str, Any]]:
+        return {
+            period: {"enabled": False, "hi_lo": False, "style": "Solid",
+                     "color": self.sma_default_colors[period]}
+            for period in SMA_PERIODS
+        }
+
+    def default_bollinger_applied(self) -> Dict[str, Any]:
+        return {
+            "enabled": False, "style": "Solid", "color": "Green",
+            "period": BOLLINGER_PERIOD, "multiplier": BOLLINGER_MULTIPLIER,
+        }
+
+    def default_levels_applied(self) -> Dict[str, Any]:
+        return {
+            "mode": "Causal",
+            "settings": LevelSettings(),
+            "horizon": HORIZONS[-1],
+            "rejection": ATR_REJECTION,
+            "windows": {
+                label: {
+                    "enabled": False,
+                    "color": self.levels_default_colors[label],
+                }
+                for label in WINDOW_LOOKBACKS
+            },
+        }
+
+    def default_tab_state(self, view: Optional[ChartTabState] = None) -> ChartTabState:
+        """A tab with every indicator at its default and nothing drawn.
+
+        The zoom and scroll position of view, if given, are kept.
+        """
+        state = ChartTabState(
+            sma_applied=self.default_sma_applied(),
+            bollinger_applied=self.default_bollinger_applied(),
+            trend_applied=default_trend_applied(),
+            levels_applied=self.default_levels_applied(),
+            indicator_settings=default_indicator_settings(),
+        )
+        if view is not None:
+            state.zoom_level = view.zoom_level
+            state.candle_height_scale = view.candle_height_scale
+            state.xview = view.xview
+            state.yview = view.yview
+        return state
+
+    def reset_chart_configuration(self) -> None:
+        """Put every indicator back to its default and clear drawings on all tabs. The loaded data stays."""
+        has_data = bool(self._daily_rows)
+        if has_data:
+            self.store_tab_state()
+        self.reset_interaction_state()
+        self.indicator_mode = "RSI"
+        for label, state in list(self._tab_states.items()):
+            self._tab_states[label] = self.default_tab_state(view=state)
+        if has_data:
+            state = self._tab_states[self.active_timeframe]
+            self.load_tab_state(state)
+            self.build_chart(self.price_data, state)
+        else:
+            self.load_tab_state(self.default_tab_state())
+
     def inherited_tab_state(self) -> ChartTabState:
         """Starting state for a tab: copies of the current indicator settings and a default view."""
         return ChartTabState(
             sma_applied=copy.deepcopy(self.sma_applied),
             bollinger_applied=copy.deepcopy(self.bollinger_applied),
+            trend_applied=copy.deepcopy(self.trend_applied),
             levels_applied=copy.deepcopy(self.levels_applied),
             indicator_settings=copy.deepcopy(self.indicator_settings),
         )
@@ -455,6 +513,7 @@ class PyTradeViz:
             draw_history=self._draw_history,
             sma_applied=self.sma_applied,
             bollinger_applied=self.bollinger_applied,
+            trend_applied=self.trend_applied,
             levels_applied=self.levels_applied,
             indicator_settings=self.indicator_settings,
             zoom_level=self.zoom_level,
@@ -472,6 +531,7 @@ class PyTradeViz:
         self._draw_history = state.draw_history
         self.sma_applied = state.sma_applied
         self.bollinger_applied = state.bollinger_applied
+        self.trend_applied = state.trend_applied
         self.levels_applied = state.levels_applied
         self.indicator_settings = state.indicator_settings
 
@@ -500,6 +560,8 @@ class PyTradeViz:
             canvas.delete("all")
         self._sma_items = []
         self._bollinger_items = []
+        self._trend_items = []
+        self._trend_cache = None
         self._levels_items = []
         self._levels_cache = None
 
@@ -634,6 +696,26 @@ class PyTradeViz:
             self.load_more_button.state(["disabled"])
         else:
             self.load_more_button.state(["!disabled"])
+
+    def open_reset_window(self, tk: ModuleType) -> None:
+        window = self.open_modal_window(tk, "Reset")
+        tk.Label(
+            window, justify="left", wraplength=360, text=(
+                "Reset every indicator to its default settings and clear all drawings "
+                "on every timeframe. The loaded data is kept."
+            ),
+        ).pack(fill="x", padx=12, pady=(12, 0))
+        buttons = tk.Frame(window)
+        buttons.pack(fill="x", padx=12, pady=12)
+        tk.Button(
+            buttons, text="Confirm", width=8,
+            command=lambda: self.confirm_reset(window),
+        ).pack(side="left")
+        tk.Button(buttons, text="Cancel", width=8, command=window.destroy).pack(side="left", padx=(8, 0))
+
+    def confirm_reset(self, window: Any) -> None:
+        window.destroy()
+        self.reset_chart_configuration()
 
     def open_about_window(self, tk: ModuleType) -> None:
         window = self.open_modal_window(tk, "About PyTradeViz")
@@ -802,6 +884,9 @@ class PyTradeViz:
             label="Bollinger", command=lambda: self.open_bollinger_window(tk),
         )
         indicators_menu.add_command(
+            label="Trend Identification", command=lambda: self.open_trend_window(tk),
+        )
+        indicators_menu.add_command(
             label="Support and Resistance", command=lambda: self.open_levels_window(tk),
         )
         return indicators_menu
@@ -958,7 +1043,6 @@ class PyTradeViz:
             staged["windows"][label] = {
                 "enabled": tk.BooleanVar(window, value=window_applied["enabled"]),
                 "color": tk.StringVar(window, value=window_applied["color"]),
-                "style": tk.StringVar(window, value=window_applied["style"]),
             }
             staged["status"][label] = tk.StringVar(window, value=self.levels_status_text(label))
 
@@ -1009,10 +1093,7 @@ class PyTradeViz:
             for column, color in enumerate(self.sma_colors, start=1):
                 tk.Radiobutton(group, text=color, value=color, variable=variables["color"]).grid(
                     row=1, column=column, sticky="w")
-            tk.Label(group, text="Style:").grid(row=2, column=0, sticky="w")
-            for column, style in enumerate(self.levels_styles, start=1):
-                tk.Radiobutton(group, text=style, value=style, variable=variables["style"]).grid(
-                    row=2, column=column, sticky="w")
+
 
         buttons = tk.Frame(window)
         buttons.pack(fill="x", padx=12, pady=12)
@@ -1053,7 +1134,6 @@ class PyTradeViz:
                 label: {
                     "enabled": variables["enabled"].get(),
                     "color": variables["color"].get(),
-                    "style": variables["style"].get(),
                 }
                 for label, variables in staged["windows"].items()
             },
@@ -1984,9 +2064,9 @@ class PyTradeViz:
         press_x, press_y = self._press_position
         if abs(event.x - press_x) + abs(event.y - press_y) > self.click_drag_threshold:
             return
-        index = self.candle_index_at(
-            self.canvas.canvasx(event.x), self.canvas.canvasy(event.y)
-        )
+        chart_x = self.canvas.canvasx(event.x)
+        chart_y = self.canvas.canvasy(event.y)
+        index = self.candle_index_at(chart_x, chart_y)
         self.set_selection({index} if index is not None else set(), None)
         if index is not None:
             self.show_candle_info(index)
@@ -2147,6 +2227,13 @@ class PyTradeViz:
                     self.canvas, chart_x, self.canvas.canvasy(0) + 4,
                     date, "n", line_color, text_color,
                 )
+                if self.trend_applied["enabled"]:
+                    state, adx = self.trend_details()[index]
+                    if state is not None:
+                        self.draw_crosshair_label(
+                            self.canvas, chart_x, self.canvas.canvasy(0) + 24,
+                            f"{state}  ADX {adx:.1f}", "n", line_color, text_color,
+                        )
 
     def blend_colors(self, first: str, second: str, amount: float) -> str:
         first_rgb = [c >> 8 for c in self.window.winfo_rgb(first)]
@@ -2275,6 +2362,157 @@ class PyTradeViz:
                 tags=("bollinger", f"bollinger_{name}"),
             ))
 
+    def trend_volumes(self) -> Optional[List[float]]:
+        """Volume for each candle, or None when the loaded data has no volume."""
+        if not self.price_data or "volume" not in self.price_data[0][5]:
+            return None
+        return [row[5]["volume"] for row in self.price_data]
+
+    def trend_details(self) -> List[Tuple[Optional[str], Optional[float]]]:
+        """Trend state and ADX for every candle. Recomputed only when the data or settings change."""
+        settings = self.trend_applied
+        volumes = self.trend_volumes() if settings["include_volume"] else None
+        key = (id(self.price_data), len(self.price_data), settings["adx_enter"], settings["adx_exit"],
+               settings["sma_fast"], settings["sma_slow"], volumes is not None)
+        if self._trend_cache is None or self._trend_cache[0] != key:
+            rows = self.price_data
+            details = layered_trend_details(
+                [row[HIGH_COLUMN] for row in rows],
+                [row[LOW_COLUMN] for row in rows],
+                [row[CLOSE_COLUMN] for row in rows],
+                settings["adx_enter"], settings["adx_exit"],
+                settings["sma_fast"], settings["sma_slow"],
+                volumes,
+            )
+            self._trend_cache = (key, details)
+        return self._trend_cache[1]
+
+    def draw_trend_shading(self) -> None:
+        for item in self._trend_items:
+            self.canvas.delete(item)
+        self._trend_items = []
+        if not self.trend_applied["enabled"] or not self.price_data:
+            return
+        theme = self.get_theme()
+        colors = {
+            UP: self.blend_colors(theme["canvas"], theme["gain"], TREND_SHADE_STRENGTH),
+            DOWN: self.blend_colors(theme["canvas"], theme["loss"], TREND_SHADE_STRENGTH),
+            SIDEWAYS: self.blend_colors(theme["canvas"], theme["grid"], TREND_SHADE_STRENGTH),
+        }
+        top = self.price_to_y(self.price_upper)
+        bottom = self.price_to_y(self.price_lower)
+        half_width = self.chart_grid_divider_v * self._scale_x / 2
+        # Consecutive candles with the same state share one rectangle.
+        runs: List[List[Any]] = []
+        for index, (state, _adx) in enumerate(self.trend_details()):
+            if state is None:
+                continue
+            if runs and runs[-1][2] == state and runs[-1][1] == index - 1:
+                runs[-1][1] = index
+            else:
+                runs.append([index, index, state])
+        for first, last, state in runs:
+            self._trend_items.append(self.canvas.create_rectangle(
+                self.candle_x(first) - half_width, top,
+                self.candle_x(last) + half_width, bottom,
+                fill=colors[state], outline="", tags=("trend",),
+            ))
+        # The shading goes beneath the candles, grid and other overlays.
+        if self._trend_items:
+            self.canvas.tag_lower("trend")
+
+    def initialize_trend_toggle(self, tk: ModuleType) -> None:
+        # A widget rather than a canvas item: it is placed in window coordinates,
+        # so it stays fixed on screen while the chart scrolls.
+        self.trend_toggle_label = tk.Label(
+            self.frame_canvas, text=TREND_TOGGLE_LABEL, relief="solid", bd=1,
+            padx=INDICATOR_TOGGLE_PADDING, cursor="hand2",
+        )
+        self.trend_toggle_label.bind("<Button-1>", lambda _event: self.toggle_trend())
+        self.trend_toggle_label.place_forget()
+
+    def draw_trend_toggle(self) -> None:
+        label = self.trend_toggle_label
+        if not self.price_data:
+            label.place_forget()
+            return
+        theme = self.get_theme()
+        active = self.trend_applied["enabled"]
+        label.configure(
+            bg=theme["ink"] if active else theme["canvas"],
+            fg=theme["canvas"] if active else theme["ink"],
+        )
+        label.place(
+            in_=self.canvas, relx=0.0, rely=1.0, anchor="sw",
+            x=INDICATOR_TOGGLE_MARGIN, y=-INDICATOR_TOGGLE_MARGIN,
+        )
+
+    def toggle_trend(self) -> None:
+        self.trend_applied = {**self.trend_applied, "enabled": not self.trend_applied["enabled"]}
+        self.draw_overlays()
+
+    def open_trend_window(self, tk: ModuleType) -> None:
+        window = self.open_modal_window(tk, "Trend Identification")
+        self.build_trend_content(tk, window)
+
+    def build_trend_content(self, tk: ModuleType, window: Any) -> None:
+        # Edits are staged in these variables and only applied by the Apply button.
+        applied = self.trend_applied
+        defaults = default_trend_settings()
+        has_volume = self.trend_volumes() is not None
+        staged: Dict[str, Any] = {
+            "enabled": tk.BooleanVar(window, value=applied["enabled"]),
+            "include_volume": tk.BooleanVar(window, value=applied["include_volume"]),
+        }
+        display = tk.LabelFrame(window, text="Display", padx=10, pady=6)
+        display.pack(fill="x", padx=12, pady=(12, 0))
+        tk.Checkbutton(display, text="Show trend shading", variable=staged["enabled"]).grid(
+            row=0, column=0, sticky="w")
+        tk.Checkbutton(
+            display, text="Include volume", variable=staged["include_volume"],
+            state="normal" if has_volume else "disabled",
+        ).grid(row=1, column=0, sticky="w")
+        if not has_volume:
+            tk.Label(display, text="The loaded data has no volume column.", fg="gray").grid(
+                row=1, column=1, sticky="w", padx=(12, 0))
+        settings = tk.LabelFrame(window, text="Trend settings", padx=10, pady=6)
+        settings.pack(fill="x", padx=12, pady=(12, 0))
+        for row, (key, label, _kind, _low, _high) in enumerate(TREND_SETTING_FIELDS):
+            staged[key] = tk.StringVar(window, value=format_setting_value(applied[key]))
+            tk.Label(settings, text=label).grid(row=row, column=0, sticky="w", pady=2)
+            tk.Entry(settings, textvariable=staged[key], width=10).grid(
+                row=row, column=1, sticky="w", padx=(12, 12), pady=2)
+            tk.Label(settings, text=f"Default: {format_setting_value(defaults[key])}", fg="gray").grid(
+                row=row, column=2, sticky="w", pady=2)
+
+        buttons = tk.Frame(window)
+        buttons.pack(fill="x", padx=12, pady=12)
+        tk.Button(buttons, text="Cancel", width=8, command=window.destroy).pack(side="left")
+        tk.Button(
+            buttons, text="Apply", width=8,
+            command=lambda: self.apply_trend(window, staged),
+        ).pack(side="left", padx=(8, 0))
+        tk.Button(
+            buttons, text="Help", width=8,
+            command=lambda: self.show_help_window(
+                tk, "Trend Identification Help", TREND_DETAILED_HELP, window),
+        ).pack(side="left", padx=(8, 0))
+
+    def apply_trend(self, window: Any, staged: Dict[str, Any]) -> None:
+        # Nothing changes unless every setting is valid, so the shading stays as it was.
+        try:
+            values = validate_trend_settings({field[0]: staged[field[0]].get() for field in TREND_SETTING_FIELDS})
+        except ValueError as error:
+            messagebox.showerror("Invalid setting", str(error), parent=window)
+            return
+        self.trend_applied = {
+            "enabled": staged["enabled"].get(),
+            # Volume can only be used when the loaded data has it.
+            "include_volume": staged["include_volume"].get() and self.trend_volumes() is not None,
+            **values,
+        }
+        self.draw_overlays()
+
     def draw_levels(self) -> None:
         for item in self._levels_items:
             self.canvas.delete(item)
@@ -2302,22 +2540,18 @@ class PyTradeViz:
                           segment.origin, segment.touches)
                          for segment in segment_cache[label]]
             color = self.sma_colors[settings["color"]]
-            style = settings["style"]
             for start, end, price, kind, origin, touches in spans:
-                if style == "Triangles":
-                    # Only candles in view get a marker, so zoomed-out charts stay responsive.
-                    for index in range(max(start, first_visible), min(end, last_visible) + 1):
-                        self.draw_level_marker(index, price, kind, color, label)
-                else:
-                    self.draw_level_line(start, end, price, kind, color, label,
-                                         wavy=style == "Wavy")
+                self.draw_level_line(start, end, price, kind, color, label)
+                distance = study.rejection_distance(origin, price)
+                if distance is not None:
+                    self.draw_rejection_line(start, end, price, kind, distance, color, label)
                 # One odds label per level, where its drawing ends on screen. A level that
                 # runs past the right edge is labelled at that edge.
                 if start <= last_visible and end >= first_visible:
                     odds = study.odds_at(origin, price, kind, touches)
                     self.draw_level_odds(min(end, last_visible), price, color, label,
                                          odds_text(odds), occupied_label_boxes)
-        # Markers sit above the candles so a body never hides a level.
+        # Level lines sit above the candles so a body never hides a level.
         if self._levels_items:
             self.canvas.tag_raise("levels")
 
@@ -2338,38 +2572,34 @@ class PyTradeViz:
         occupied.append(box)
         self._levels_items.append(item)
 
-    def draw_level_marker(self, index: int, price: float, kind: str, color: str,
-                          label: str) -> None:
-        x = self.candle_x(index)
-        y = self.price_to_y(price)
-        r = self.levels_marker_radius
-        tags = ("levels", f"levels_{label}")
-        if kind == SUPPORT:
-            # Solid triangle pointing up.
-            points = (x, y - r, x - r, y + r, x + r, y + r)
-            item = self.canvas.create_polygon(
-                *points, fill=color, outline=color, tags=tags)
-        else:
-            # Hollow triangle pointing down.
-            points = (x - r, y - r, x + r, y - r, x, y + r)
-            item = self.canvas.create_polygon(
-                *points, fill="", outline=color, width=2, tags=tags)
-        self._levels_items.append(item)
-
     def draw_level_line(self, start: int, end: int, price: float, kind: str, color: str,
-                        label: str, wavy: bool) -> None:
-        item = self.level_line_item(start, end, price, kind, color, wavy,
-                                    tags=("levels", f"levels_{label}"))
+                        label: str) -> None:
+        item = self.level_line_item(start, end, price, kind, color,
+                                    tags=("levels", f"levels_{label}", f"level_{kind}"))
+        if item is not None:
+            self._levels_items.append(item)
+
+    def draw_rejection_line(self, start: int, end: int, price: float, kind: str,
+                            distance: float, color: str, label: str) -> None:
+        # The rejection distance is above a support and below a resistance.
+        rejection_price = price + distance if kind == SUPPORT else price - distance
+        item = self.horizontal_level_item(
+            start, end, rejection_price, color, STYLE_DASHES[DOTTED],
+            tags=("levels", f"levels_{label}", "level_rejection"))
         if item is not None:
             self._levels_items.append(item)
 
     def level_line_item(self, start: int, end: int, price: float, kind: str, color: str,
-                        wavy: bool, tags: Tuple[str, ...]) -> Optional[int]:
-        """Create a level line from candle start to candle end, clipped to the view.
+                        tags: Tuple[str, ...]) -> Optional[int]:
+        """Solid line for support and dashed line for resistance, from candle start to end."""
+        dash = STYLE_DASHES[SOLID] if kind == SUPPORT else STYLE_DASHES[DASHED]
+        return self.horizontal_level_item(start, end, price, color, dash, tags)
 
-        Returns None when the line lies outside the view. Support is a straight line
-        (solid, or dashed in Wavy style). Resistance is a zigzag (solid in Lines style)
-        or a wave (solid in Wavy style).
+    def horizontal_level_item(self, start: int, end: int, price: float, color: str,
+                              dash: Tuple[int, ...], tags: Tuple[str, ...]) -> Optional[int]:
+        """A straight line at ``price`` from candle start to end, clipped to the view.
+
+        Returns None when the line lies outside the view.
         """
         left, right = self.visible_x_range()
         x0 = max(self.candle_x(start), left)
@@ -2377,38 +2607,9 @@ class PyTradeViz:
         if x0 > x1:
             return None
         y = self.price_to_y(price)
-        if kind == SUPPORT:
-            points = [x0, y, x1, y]
-            dash = (6, 4) if wavy else ()
-        elif wavy:
-            points = self.wave_points(x0, x1, y)
-            dash = ()
-        else:
-            points = self.zigzag_points(x0, x1, y)
-            dash = ()
+        cap = "round" if dash == STYLE_DASHES[DOTTED] else "butt"
         return self.canvas.create_line(
-            *points, fill=color, width=2, dash=dash, joinstyle="round", tags=tags)
-
-    def zigzag_points(self, x0: float, x1: float, y: float) -> List[float]:
-        # Vertices sit on a fixed pixel grid so the zigzag does not shift when scrolling.
-        step = self.levels_zigzag_step
-        amp = self.levels_zigzag_amplitude
-        points = [x0, y]
-        for k in range(math.floor(x0 / step) + 1, math.ceil(x1 / step)):
-            points.extend((k * step, y - amp if k % 2 else y + amp))
-        points.extend((x1, y))
-        return points
-
-    def wave_points(self, x0: float, x1: float, y: float) -> List[float]:
-        # Samples on a fixed pixel grid so the wave does not shift when scrolling.
-        sample = 2.0
-        period = self.levels_wave_period
-        amp = self.levels_wave_amplitude
-        points: List[float] = []
-        for k in range(math.floor(x0 / sample), math.ceil(x1 / sample) + 1):
-            x = min(max(k * sample, x0), x1)
-            points.extend((x, y - amp * math.sin(2 * math.pi * x / period)))
-        return points
+            x0, y, x1, y, fill=color, width=2, dash=dash, capstyle=cap, tags=tags)
 
     def visible_x_range(self) -> Tuple[float, float]:
         """Return the left and right canvas x coordinates of the visible area."""
@@ -2426,6 +2627,7 @@ class PyTradeViz:
 
     def draw_overlays(self) -> None:
         self.thin_price_labels()
+        self.draw_trend_shading()
         self.draw_selection_box()
         self.draw_moving_averages()
         self.draw_bollinger()
@@ -2435,6 +2637,7 @@ class PyTradeViz:
         self.draw_toolbox()
         self.draw_indicator_toggles()
         self.draw_indicator_info_button()
+        self.draw_trend_toggle()
         self.draw_crosshair()
 
     def refresh_drawing_layer(self) -> None:
@@ -2707,7 +2910,7 @@ class PyTradeViz:
             items = []
             for level in finder.levels_at(index, label):
                 item = self.level_line_item(
-                    start, index, level.price, level.kind, color, wavy=False,
+                    start, index, level.price, level.kind, color,
                     tags=("sr_levels", f"sr_levels_{label}"))
                 if item is not None:
                     items.append(item)

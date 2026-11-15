@@ -213,6 +213,16 @@ class BreakoutStudy:
             ))
         self._timeline = timeline(self.events)
 
+    def rejection_distance(self, index: int, price: float) -> Optional[float]:
+        """Distance from a level priced at candle ``index`` that counts as a rejection.
+
+        It matches the distance used for the event at that candle: 1 ATR there, or 2% of
+        the level's price. None when the rule needs an ATR the candle does not have yet.
+        """
+        if self.rejection == PERCENT_REJECTION:
+            return PERCENT_REJECTION_SHARE * price
+        return self._atr[index]
+
     def odds_at(self, index: int, price: float, kind: str, touches: int) -> Optional[Odds]:
         """Historical odds for a level like this one, as known on candle ``index``.
 

@@ -11,6 +11,8 @@ from tkinter import ttk
 from typing import Any, List
 from unittest import mock
 
+from breakout import ATR_REJECTION, average_true_range
+from drawings import DASHED, DOTTED, STYLE_DASHES
 from levels import SUPPORT
 from pytradeviz import PyTradeViz
 from test_roi import load_price_rows
@@ -62,20 +64,21 @@ class LevelsWindowTests(unittest.TestCase):
                        if c.cget("text") == text)
         control.invoke()
 
-    def show_window(self, window: tk.Misc, label: str, color: str,
-                    style: str = "Triangles") -> None:
+    def show_window(self, window: tk.Misc, label: str, color: str) -> None:
         group = self.window_group(window, label)
         self.choose(group, "Show")
         self.choose(group, color)
-        self.choose(group, style)
 
-    def marker_points(self, item: int) -> List[float]:
+    def item_coords(self, item: int) -> List[float]:
         return list(self.viz.canvas.coords(item))
 
     def level_items(self, label: str) -> List[int]:
-        """Markers and lines for a window; odds labels are listed by odds_labels."""
+        """Level and rejection lines for a window; odds labels are listed by odds_labels."""
         return [item for item in self.viz.canvas.find_withtag(f"levels_{label}")
                 if self.viz.canvas.type(item) != "text"]
+
+    def items_tagged(self, label: str, tag: str) -> List[int]:
+        return [item for item in self.level_items(label) if tag in self.viz.canvas.gettags(item)]
 
     def odds_labels(self, label: str) -> List[int]:
         return [item for item in self.viz.canvas.find_withtag(f"levels_{label}")
@@ -108,109 +111,77 @@ class LevelsWindowTests(unittest.TestCase):
         self.assertTrue(items)
         color = self.viz.sma_colors["Red"]
         for item in items:
-            self.assertEqual(self.viz.canvas.type(item), "polygon")
-            self.assertEqual(self.viz.canvas.itemcget(item, "outline"), color)
-            self.assertEqual(self.viz.canvas.itemcget(item, "dash"), "")
+            self.assertEqual(self.viz.canvas.itemcget(item, "fill"), color)
 
-    def test_support_markers_are_solid_and_point_up(self) -> None:
-        self.open_levels_window()
-        color = self.viz.sma_colors["Red"]
-        self.viz.draw_level_marker(10, 0.7, SUPPORT, color, "6M")
-        item = self.viz._levels_items[-1]
-        x0, y0, x1, y1, x2, y2 = self.marker_points(item)
-        self.assertEqual(self.viz.canvas.itemcget(item, "fill"), color)
-        self.assertLess(y0, y1)              # apex above the base
-        self.assertEqual(y1, y2)              # flat base
-        self.assertLess(x1, x0)
-        self.assertLess(x0, x2)
+    def test_no_style_control_is_offered(self) -> None:
+        window = self.open_levels_window()
+        group = self.window_group(window, "6M")
+        radios = {str(r.cget("text")) for r in self.descendants(group, tk.Radiobutton)}
+        self.assertFalse(radios & {"Triangles", "Lines", "Wavy"})
+        self.assertNotIn("style", self.viz.levels_applied["windows"]["6M"])
 
-    def test_resistance_markers_are_hollow_and_point_down(self) -> None:
+    def test_support_is_solid_and_resistance_is_dashed(self) -> None:
         window = self.open_levels_window()
         self.choose(window, "Static (latest levels across the whole chart)")
         self.show_window(window, "6M", "Red")
         self.apply(window)
-        color = self.viz.sma_colors["Red"]
-        resistances = [i for i in self.level_items("6M")
-                       if self.viz.canvas.itemcget(i, "fill") == ""]
+        resistances = self.items_tagged("6M", "level_resistance")
+        # The latest candle of this data has only resistance above price, so the support
+        # style is checked directly on the visible range as well.
         self.assertTrue(resistances)
+        dashed = " ".join(str(v) for v in STYLE_DASHES[DASHED])
         for item in resistances:
-            x0, y0, x1, y1, x2, y2 = self.marker_points(item)
-            self.assertEqual(y0, y1)              # flat top
-            self.assertLess(y0, y2)               # apex below the top
-            self.assertEqual(self.viz.canvas.itemcget(item, "outline"), color)
+            self.assertEqual(self.viz.canvas.itemcget(item, "dash"), dashed)
+        first, last = self.viz.visible_candle_range()
+        price = self.viz.price_data[last][4]
+        support = self.viz.level_line_item(first, last, price, SUPPORT, "red", tags=("probe",))
+        self.assertIsNotNone(support)
+        self.assertEqual(self.viz.canvas.itemcget(support, "dash"), "")
 
-    def test_style_choices_are_triangles_lines_and_wavy(self) -> None:
-        window = self.open_levels_window()
-        group = self.window_group(window, "6M")
-        radios = {str(r.cget("text")) for r in self.descendants(group, tk.Radiobutton)}
-        self.assertTrue({"Triangles", "Lines", "Wavy"} <= radios)
-        self.assertFalse(radios & set(self.viz.sma_line_styles))
-        self.assertEqual(self.viz.levels_applied["windows"]["6M"]["style"], "Triangles")
-
-    def test_each_window_keeps_its_own_style(self) -> None:
+    def test_rejection_lines_are_dotted_at_the_rejection_distance(self) -> None:
         window = self.open_levels_window()
         self.choose(window, "Static (latest levels across the whole chart)")
-        self.show_window(window, "2M", "Blue", "Triangles")
-        self.show_window(window, "6M", "Red", "Lines")
+        self.show_window(window, "6M", "Red")
         self.apply(window)
-        for item in self.level_items("2M"):
-            self.assertEqual(self.viz.canvas.type(item), "polygon")
-        self.assertTrue(self.level_items("6M"))
-        for item in self.level_items("6M"):
-            self.assertEqual(self.viz.canvas.type(item), "line")
+        dotted = " ".join(str(v) for v in STYLE_DASHES[DOTTED])
+        rejections = self.items_tagged("6M", "level_rejection")
+        for item in rejections:
+            self.assertEqual(self.viz.canvas.itemcget(item, "dash"), dotted)
+        finder, _, _ = self.viz.levels_for_chart()
+        study = self.viz.breakout_study("6M")
+        last = len(self.viz.price_data) - 1
+        expected = []
+        for level in finder.static_levels("6M"):
+            distance = study.rejection_distance(last, level.price)
+            above = level.kind == SUPPORT
+            price = level.price + distance if above else level.price - distance
+            expected.append(self.viz.price_to_y(price))
+        actual = sorted(self.item_coords(item)[1] for item in rejections)
+        self.assertEqual(len(actual), len(expected))
+        for got, want in zip(actual, sorted(expected)):
+            self.assertAlmostEqual(got, want, places=6)
 
-    def test_lines_style_draws_solid_zigzag_resistance(self) -> None:
-        window = self.open_levels_window()
-        self.choose(window, "Static (latest levels across the whole chart)")
-        self.show_window(window, "6M", "Red", "Lines")
-        self.apply(window)
-        items = self.level_items("6M")
-        self.assertTrue(items)
-        for item in items:
-            self.assertEqual(self.viz.canvas.itemcget(item, "dash"), "")
-            ys = self.marker_points(item)[1::2]
-            self.assertGreater(len(ys), 2)
-            self.assertGreater(max(ys) - min(ys), 0)  # zigzag, not a flat line
-        self.assertGreater(len(self.marker_points(items[0])), 4)
-
-    def test_wavy_style_has_dashed_support_and_solid_wave_resistance(self) -> None:
-        window = self.open_levels_window()
-        self.choose(window, "Static (latest levels across the whole chart)")
-        self.show_window(window, "6M", "Red", "Wavy")
-        self.apply(window)
-        for item in self.level_items("6M"):
-            self.assertEqual(self.viz.canvas.itemcget(item, "dash"), "")
-            ys = self.marker_points(item)[1::2]
-            self.assertGreater(max(ys) - min(ys), 0)
-
-        self.viz.draw_level_line(0, 10, 0.7, SUPPORT, "red", "6M", wavy=True)
-        support = self.viz._levels_items[-1]
-        self.assertNotEqual(self.viz.canvas.itemcget(support, "dash"), "")
-        ys = self.marker_points(support)[1::2]
-        self.assertEqual(max(ys), min(ys))    # straight line
-
-    def test_zigzag_and_wave_stay_around_the_level(self) -> None:
-        y, amp = 500.0, self.viz.levels_zigzag_amplitude
-        zig = self.viz.zigzag_points(0.0, 100.0, y)
-        self.assertEqual(zig[:2], [0.0, y])
-        self.assertEqual(zig[-2:], [100.0, y])
-        xs = zig[0::2]
-        self.assertEqual(xs, sorted(xs))
-        self.assertTrue(all(abs(v - y) <= amp for v in zig[1::2]))
-        wave_amp = self.viz.levels_wave_amplitude
-        wave = self.viz.wave_points(0.0, 100.0, y)
-        self.assertTrue(all(abs(v - y) <= wave_amp + 1e-9 for v in wave[1::2]))
+    def test_rejection_distance_follows_the_rejection_rule(self) -> None:
+        rows = self.viz.price_data
+        last = len(rows) - 1
+        self.viz.levels_applied = {**self.viz.levels_applied, "rejection": "2%"}
+        percent = self.viz.breakout_study("6M")
+        self.assertAlmostEqual(percent.rejection_distance(last, 0.7), 0.014)
+        self.viz.levels_applied = {**self.viz.levels_applied, "rejection": ATR_REJECTION}
+        atr = self.viz.breakout_study("6M")
+        self.assertAlmostEqual(atr.rejection_distance(last, 0.7), average_true_range(rows)[last])
+        self.assertIsNone(atr.rejection_distance(5, 0.7))
 
     def test_lines_are_clipped_to_the_visible_range(self) -> None:
         window = self.open_levels_window()
         self.choose(window, "Static (latest levels across the whole chart)")
-        self.show_window(window, "6M", "Red", "Lines")
+        self.show_window(window, "6M", "Red")
         self.apply(window)
         left, right = self.viz.visible_x_range()
         items = self.level_items("6M")
         self.assertTrue(items)
         for item in items:
-            xs = self.marker_points(item)[0::2]
+            xs = self.item_coords(item)[0::2]
             self.assertGreaterEqual(min(xs), left - 1)
             self.assertLessEqual(max(xs), right + 1)
 
@@ -231,31 +202,13 @@ class LevelsWindowTests(unittest.TestCase):
         self.apply(window)
         self.assertEqual(self.level_items("6M"), [])
 
-    def test_static_mode_marks_every_visible_candle_for_each_level(self) -> None:
+    def test_static_mode_draws_a_level_and_a_rejection_line_per_level(self) -> None:
         window = self.open_levels_window()
         self.choose(window, "Static (latest levels across the whole chart)")
         self.show_window(window, "6M", "Red")
         self.apply(window)
         finder, _, _ = self.viz.levels_for_chart()
-        first, last = self.viz.visible_candle_range()
-        self.assertEqual(
-            len(self.level_items("6M")),
-            len(finder.static_levels("6M")) * (last - first + 1),
-        )
-
-    def test_markers_are_drawn_only_for_visible_candles(self) -> None:
-        window = self.open_levels_window()
-        self.choose(window, "Static (latest levels across the whole chart)")
-        self.show_window(window, "6M", "Red")
-        self.apply(window)
-        canvas = self.viz.canvas
-        first, last = self.viz.visible_candle_range()
-        radius = self.viz.levels_marker_radius
-        for item in self.level_items("6M"):
-            x0, _, _, _, x2, _ = self.marker_points(item)
-            self.assertGreaterEqual(x0, self.viz.candle_x(first) - radius - 1e-6)
-            self.assertLessEqual(x2, self.viz.candle_x(last) + radius + 1e-6)
-        self.assertLessEqual(self.viz.candle_x(last), canvas.canvasx(canvas.winfo_width()) + 1e-6)
+        self.assertEqual(len(self.level_items("6M")), 2 * len(finder.static_levels("6M")))
 
     def test_invalid_settings_are_rejected_and_not_applied(self) -> None:
         window = self.open_levels_window()
@@ -342,8 +295,8 @@ class LevelsWindowTests(unittest.TestCase):
         (text_widget,) = self.descendants(help_window, tk.Text)
         content = text_widget.get("1.0", "end")
         for term in ("Pivot bars", "Cluster width", "Min touches", "Causal", "Static",
-                     "Triangles", "Lines", "Wavy", "Show", "Color", "1M", "6M",
-                     "Horizon", "Rejection", "1 ATR", "2%", "too few", "Apply"):
+                     "Support", "Resistance", "solid", "dashed", "dotted", "Show", "Color",
+                     "1M", "6M", "Horizon", "Rejection", "1 ATR", "2%", "too few", "Apply"):
             self.assertIn(term, content)
 
     def test_closing_help_returns_the_grab_to_the_levels_window(self) -> None:

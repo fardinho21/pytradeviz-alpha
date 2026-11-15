@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 import tkinter as tk
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 # Simple moving average periods, counted in candles (rows of price data).
 SMA_PERIODS: Tuple[int, ...] = (3, 7, 14, 30)
@@ -146,6 +146,23 @@ def rsi_crosses_level(previous: Optional[float], current: Optional[float], level
     if previous is None or current is None:
         return None
     return (previous - level) * (current - level) < 0
+
+
+def on_balance_volume(closes: Sequence[float], volumes: Sequence[float]) -> List[float]:
+    """Running total of volume: added on up closes, taken away on down closes.
+
+    The first candle has no earlier close to compare with, so its volume is not counted.
+    """
+    total = 0.0
+    values: List[float] = []
+    for index, (close, volume) in enumerate(zip(closes, volumes)):
+        if index > 0:
+            if close > closes[index - 1]:
+                total += volume
+            elif close < closes[index - 1]:
+                total -= volume
+        values.append(total)
+    return values
 
 
 def adx_components(

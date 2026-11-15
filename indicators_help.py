@@ -103,6 +103,43 @@ BOLLINGER_SETTINGS_HELP: HelpSection = ("Settings", (
 
 BOLLINGER_DETAILED_HELP: Tuple[HelpSection, ...] = (BOLLINGER_HELP, BOLLINGER_SETTINGS_HELP)
 
+# Trend Identification shades the price chart behind the candles and is set up from Indicators > Trend Identification.
+TREND_HELP: HelpSection = ("Trend Identification", (
+    "The trend shading labels each candle as UP, DOWN or SIDEWAYS. Green means UP, red means "
+    "DOWN and gray means SIDEWAYS. The shading is light so the candles stay readable. "
+    "Candles at the start of the data show no shading until both layers have enough history.",
+    "The label has two parts. First, an ADX gate decides whether a trend exists: when ADX is "
+    "high enough the market is trending, and when it is low the label is SIDEWAYS. Second, "
+    "when the gate is on, the 7-candle SMA above the 30-candle SMA means UP, and below means DOWN.",
+    "Hovering the crosshair over a candle shows its state and ADX value near the top of the chart.",
+    "The label uses only the closing prices and the high-low range of each candle up to that "
+    "candle. It does not use later candles. It is a context label, not a buy or sell signal.",
+))
+
+TREND_SETTINGS_HELP: HelpSection = ("Settings", (
+    "ADX entry level (default 25): the trend switches on when ADX rises to this level or above.",
+    "ADX exit level (default 20): once a trend is on, it stays on until ADX falls below this level. "
+    "The gap between the two levels stops the label from flipping when ADX hovers near one value. "
+    "The exit level cannot be above the entry level.",
+    "Fast SMA period (default 7) and slow SMA period (default 30): the moving averages whose order "
+    "sets the direction. A shorter fast period reacts sooner and changes direction more often. "
+    "A longer slow period makes the direction slower to change. The fast period must be shorter "
+    "than the slow period.",
+    "The ADX value used for the gate is always the standard 14-candle ADX. It does not follow the "
+    "period set in the ADX canvas settings.",
+    "Include volume (default off): when checked, an UP or DOWN label is kept only if on-balance "
+    "volume agrees with it. On-balance volume adds each day's volume on up closes and subtracts it "
+    "on down closes. It must sit above its 20-candle average for UP, or below it for DOWN. Otherwise "
+    "the candle is SIDEWAYS, meaning the trend is not confirmed by volume. The box is disabled when "
+    "the loaded file has no volume column. On the weekly and monthly tabs, each candle's volume is "
+    "the sum of its days. In a backtest on AMZN and APPL, this option changed labels much more often "
+    "and did not consistently improve the following returns, so treat it as an experiment.",
+    "Show trend shading only controls the shading. The TREND box at the bottom left of the price "
+    "chart switches the shading on and off without opening this window.",
+))
+
+TREND_DETAILED_HELP: Tuple[HelpSection, ...] = (TREND_HELP, TREND_SETTINGS_HELP)
+
 # Per-indicator settings help: the settings window's Help button shows the Info text for the
 # indicator followed by this section, which explains what each parameter changes on the chart.
 SETTINGS_HELP: Dict[str, HelpSection] = {

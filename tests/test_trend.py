@@ -3,8 +3,10 @@ import unittest
 from unittest import mock
 
 from trend import (
-    DOWN, MIXED, SIDEWAYS, UP, Consensus, adx_states, consensus, efficiency_ratio_states,
-    moving_average_stack_states, rsi_adx_states, swing_structure_states, trend_series, wilder_rsi,
+    DOWN, MIXED, SIDEWAYS, UP, Consensus, adx_gate_states, adx_states, consensus,
+    default_trend_settings, efficiency_ratio_states, layered_trend_details, layered_trend_states,
+    moving_average_stack_states, rsi_adx_states, sma_direction_states, swing_structure_states,
+    trend_series, validate_trend_settings, wilder_rsi,
 )
 
 
@@ -191,6 +193,129 @@ class RsiAdxTests(unittest.TestCase):
         for end in range(10, len(closes) + 1, 9):
             self.assertEqual(rsi_adx_states(highs[:end], lows[:end], closes[:end]), full[:end],
                              msg=f"lookahead when cut at {end}")
+
+
+class AdxGateTests(unittest.TestCase):
+    def test_warm_up_candles_have_no_gate_state(self):
+        self.assertEqual(adx_gate_states([None, None]), [None, None])
+
+    def test_the_gate_switches_on_at_25_and_off_below_20(self):
+        adx = [None, 24, 26, 22, 19, 22, 26, 30]
+        self.assertEqual(
+            adx_gate_states(adx),
+            [None, False, True, True, False, False, True, True],
+        )
+
+    def test_a_level_exactly_on_the_entry_threshold_turns_the_gate_on(self):
+        self.assertEqual(adx_gate_states([25.0, 20.0, 19.9]), [True, True, False])
+
+
+class SmaDirectionTests(unittest.TestCase):
+    def test_a_rising_series_is_up_and_a_falling_one_is_down_after_warm_up(self):
+        rising = sma_direction_states([float(i) for i in range(50)])
+        falling = sma_direction_states([float(-i) for i in range(50)])
+        self.assertEqual(rising[:29], [None] * 29)
+        self.assertEqual(set(rising[29:]), {UP})
+        self.assertEqual(set(falling[29:]), {DOWN})
+
+    def test_a_flat_series_is_sideways(self):
+        self.assertEqual(set(sma_direction_states([100.0] * 40)[29:]), {SIDEWAYS})
+
+
+class LayeredTrendTests(unittest.TestCase):
+    def test_a_steady_rise_is_up_once_the_warm_up_is_over(self):
+        closes = [100.0 + i for i in range(60)]
+        highs, lows = bars_from_closes(closes, spread=0.5)
+        states = layered_trend_states(highs, lows, closes)
+        self.assertEqual(states[:29], [None] * 29)
+        self.assertEqual(set(states[29:]), {UP})
+
+    def test_a_steady_fall_is_down(self):
+        closes = [200.0 - i for i in range(60)]
+        highs, lows = bars_from_closes(closes, spread=0.5)
+        self.assertEqual(set(layered_trend_states(highs, lows, closes)[29:]), {DOWN})
+
+    def test_a_range_bound_market_is_sideways(self):
+        closes = [100.0 + (1 if i % 2 else 0) for i in range(60)]
+        highs, lows = bars_from_closes(closes, spread=0.5)
+        self.assertEqual(set(layered_trend_states(highs, lows, closes)[29:]), {SIDEWAYS})
+
+    def test_a_closed_gate_overrides_the_sma_direction(self):
+        closes = [100.0 + i for i in range(60)]
+        highs, lows = bars_from_closes(closes, spread=0.5)
+        with mock.patch("trend.adx_components", return_value=([0.0] * 60, [0.0] * 60, [0.0] * 60)):
+            self.assertEqual(set(layered_trend_states(highs, lows, closes)[29:]), {SIDEWAYS})
+
+    def test_the_label_never_depends_on_later_candles(self):
+        rng = random.Random(3)
+        closes = [100.0]
+        for _ in range(119):
+            closes.append(closes[-1] + rng.uniform(-3, 3))
+        highs, lows = bars_from_closes(closes, spread=1.0)
+        full = layered_trend_states(highs, lows, closes)
+        for end in range(10, len(closes) + 1, 9):
+            self.assertEqual(layered_trend_states(highs[:end], lows[:end], closes[:end]), full[:end],
+                             msg=f"lookahead when cut at {end}")
+
+
+class LayeredTrendDetailsTests(unittest.TestCase):
+    def test_details_agree_with_the_states(self):
+        rng = random.Random(7)
+        closes = [100.0]
+        for _ in range(99):
+            closes.append(closes[-1] + rng.uniform(-2, 2))
+        highs, lows = bars_from_closes(closes, spread=1.0)
+        details = layered_trend_details(highs, lows, closes)
+        self.assertEqual([state for state, _adx in details], layered_trend_states(highs, lows, closes))
+
+    def test_adx_is_none_during_warm_up_and_a_number_after(self):
+        closes = [100.0 + i for i in range(60)]
+        highs, lows = bars_from_closes(closes, spread=0.5)
+        details = layered_trend_details(highs, lows, closes)
+        self.assertIsNone(details[0][1])
+        self.assertIsNotNone(details[-1][1])
+
+    def test_the_entry_and_exit_levels_are_used(self):
+        closes = [100.0 + i for i in range(60)]
+        highs, lows = bars_from_closes(closes, spread=0.5)
+        with mock.patch("trend.adx_components", return_value=([30.0] * 60, [0.0] * 60, [0.0] * 60)):
+            self.assertEqual(set(layered_trend_states(highs, lows, closes, enter=25, exit_level=20)[29:]), {UP})
+            self.assertEqual(set(layered_trend_states(highs, lows, closes, enter=40, exit_level=20)[29:]), {SIDEWAYS})
+
+    def test_the_sma_periods_are_used(self):
+        closes = [100.0 + i for i in range(60)]
+        highs, lows = bars_from_closes(closes, spread=0.5)
+        with mock.patch("trend.adx_components", return_value=([30.0] * 60, [0.0] * 60, [0.0] * 60)):
+            # A slow period longer than the data never warms up, so every state is None.
+            self.assertEqual(set(layered_trend_states(highs, lows, closes, slow=80)), {None})
+
+
+class TrendSettingsTests(unittest.TestCase):
+    def raw(self, **overrides):
+        values = {"adx_enter": "25", "adx_exit": "20", "sma_fast": "7", "sma_slow": "30"}
+        values.update(overrides)
+        return values
+
+    def test_the_defaults_are_accepted_and_match_the_labeler(self):
+        values = validate_trend_settings(self.raw())
+        self.assertEqual(values, default_trend_settings())
+        self.assertEqual(values, {"adx_enter": 25, "adx_exit": 20, "sma_fast": 7, "sma_slow": 30})
+
+    def test_an_exit_level_above_the_entry_level_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "exit level"):
+            validate_trend_settings(self.raw(adx_enter="20", adx_exit="25"))
+
+    def test_a_fast_period_not_below_the_slow_period_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Fast SMA"):
+            validate_trend_settings(self.raw(sma_fast="30", sma_slow="30"))
+
+    def test_out_of_range_and_non_numeric_values_are_rejected(self):
+        with self.assertRaises(ValueError):
+            validate_trend_settings(self.raw(adx_enter="150"))
+        with self.assertRaises(ValueError):
+            validate_trend_settings(self.raw(sma_slow="1"))
+        with self.assertRaises(ValueError):
+            validate_trend_settings(self.raw(sma_fast="seven"))
 
 
 class TrendSeriesTests(unittest.TestCase):
