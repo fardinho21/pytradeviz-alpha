@@ -14,6 +14,7 @@ from typing import Tuple
 
 from candle import Candle
 from pytradeviz import PyTradeViz
+from test_roi import reveal_candle
 
 
 @unittest.skipUnless(
@@ -22,7 +23,7 @@ from pytradeviz import PyTradeViz
 )
 class CandleInfoTests(unittest.TestCase):
     def setUp(self) -> None:
-        path = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc.csv"
+        path = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc_no_vol.csv"
         with path.open(newline="") as file:
             rows = list(csv.reader(file))[1:]
         self.price_data = [
@@ -37,7 +38,7 @@ class CandleInfoTests(unittest.TestCase):
         self.viz.window.update()
 
     def candle_center(self, index: int) -> Tuple[float, float]:
-        x1, y1, x2, y2 = self.viz.canvas.bbox(f"candle_{index}")
+        x1, y1, x2, y2 = reveal_candle(self.viz, index)
         return (x1 + x2) / 2, (y1 + y2) / 2
 
     def event_at(self, x: float, y: float) -> SimpleNamespace:

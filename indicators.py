@@ -326,11 +326,13 @@ class Indicators:
 
             if values[i] is not None:
                 value = values[i]
+                # Each segment ends at candle i, so it can be shown or hidden with that candle.
+                segment_tags = tags + (f"ind_{i}",)
 
                 if previous is None:
-                    tk_indicators_canvas.create_line(offset_x, 100, pos, 100 - value, fill=fill, tags=tags, **options)
+                    tk_indicators_canvas.create_line(offset_x, 100, pos, 100 - value, fill=fill, tags=segment_tags, **options)
                 else:
-                    tk_indicators_canvas.create_line(previous[0], 100 - previous[1], pos, 100 - value, fill=fill, tags=tags, **options)
+                    tk_indicators_canvas.create_line(previous[0], 100 - previous[1], pos, 100 - value, fill=fill, tags=segment_tags, **options)
 
                 previous = [pos, value]
         pass
@@ -384,27 +386,30 @@ class Indicators:
         x_for_index: Callable[[int], float], y_for_price: Callable[[float], float],
         fill: str = "black", dash: Tuple[int, ...] = (), width: int = 2,
         tags: Tuple[str, ...] = (), column: int = CLOSE_COLUMN,
+        index_range: Optional[Tuple[int, int]] = None,
     ) -> List[int]:
         """Draw the SMA for ``period`` as polylines and return the line item ids.
 
-        ``column`` selects the price field that is averaged.
+        ``column`` selects the price field that is averaged. ``index_range`` limits the
+        line to candles first..last inclusive.
         """
         return self.render_series(
             tk_canvas, self.calculate_SMA(period, column),
             x_for_index=x_for_index, y_for_price=y_for_price,
-            fill=fill, dash=dash, width=width, tags=tags,
+            fill=fill, dash=dash, width=width, tags=tags, index_range=index_range,
         )
 
     def render_series(
         self, tk_canvas: tk.Canvas, values: List[Optional[float]],
         x_for_index: Callable[[int], float], y_for_price: Callable[[float], float],
         fill: str = "black", dash: Tuple[int, ...] = (), width: int = 2,
-        tags: Tuple[str, ...] = (),
+        tags: Tuple[str, ...] = (), index_range: Optional[Tuple[int, int]] = None,
     ) -> List[int]:
         """Draw one value per row as polylines and return the line item ids.
 
         ``x_for_index`` and ``y_for_price`` map a row index and a price to canvas
-        coordinates. ``None`` entries (the warm-up rows) break the line.
+        coordinates. ``None`` entries (the warm-up rows) break the line, and so do rows
+        outside ``index_range`` (inclusive first and last) when it is given.
         """
         options: Dict[str, Any] = {"fill": fill, "width": width, "tags": tags}
         if dash:
@@ -412,7 +417,8 @@ class Indicators:
         items: List[int] = []
         run: List[float] = []
         for i, value in enumerate(values):
-            if value is None:
+            outside = index_range is not None and not index_range[0] <= i <= index_range[1]
+            if value is None or outside:
                 self._draw_run(tk_canvas, run, options, items)
                 run = []
                 continue

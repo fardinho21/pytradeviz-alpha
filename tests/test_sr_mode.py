@@ -15,7 +15,7 @@ from drawings import DASHED, STYLE_DASHES
 from levels import SUPPORT, window_start
 from pytradeviz import PyTradeViz
 from sr_popups import POPUP_HEIGHT, POPUP_WIDTH, SRPopup, popup_bounds
-from test_roi import load_price_rows
+from test_roi import load_price_rows, reveal_candle
 
 
 class PopupGeometryTests(unittest.TestCase):
@@ -85,7 +85,7 @@ class SupportResistanceModeTests(unittest.TestCase):
         )
 
     def candle_center(self, index: int) -> Tuple[float, float]:
-        x1, y1, x2, y2 = self.viz.canvas.bbox(f"candle_{index}")
+        x1, y1, x2, y2 = reveal_candle(self.viz, index)
         return (x1 + x2) / 2, (y1 + y2) / 2
 
     def click(self, x: float, y: float) -> None:
@@ -95,9 +95,8 @@ class SupportResistanceModeTests(unittest.TestCase):
 
     def scroll_to(self, index: int) -> None:
         canvas = self.viz.canvas
-        x1 = canvas.bbox(f"candle_{index}")[0]
         total = canvas.bbox("all")[2]
-        canvas.xview_moveto(max(0.0, (x1 - canvas.winfo_width() / 2) / total))
+        canvas.xview_moveto(max(0.0, (self.viz.candle_x(index) - canvas.winfo_width() / 2) / total))
         self.viz.window.update()
 
     def click_candle(self, index: int) -> None:

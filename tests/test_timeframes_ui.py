@@ -17,7 +17,7 @@ from test_roi import load_price_rows
 from timeframes import DAILY, timeframe_rows
 
 MONTH_NAMES = {datetime.date(2000, m, 1).strftime("%b")[:2] for m in range(1, 13)}
-DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc.csv"
+DATA_PATH = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc_no_vol.csv"
 SMA_PERIOD = SMA_PERIODS[0]
 
 

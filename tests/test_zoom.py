@@ -13,6 +13,7 @@ from typing import Any, Optional, Tuple
 from indicators import SMA_PERIODS
 from levels import LevelSettings
 from pytradeviz import PyTradeViz
+from timeframes import DAILY
 
 
 class CanvasStub:
@@ -86,6 +87,7 @@ class ZoomTests(unittest.TestCase):
     def setUp(self) -> None:
         self.viz = PyTradeViz.__new__(PyTradeViz)
         self.viz.zoom_level = 1.0
+        self.viz.active_timeframe = DAILY
         self.viz._scale_x = 1.0
         self.viz._scale_y = 1.0
         self.viz.chart_grid_space_x = 2000

@@ -10,11 +10,12 @@ import tkinter as tk
 import unittest
 from tkinter import ttk
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, List
 
 from candle import Candle
 from indicators import Indicators
 from pytradeviz import PyTradeViz
+from test_roi import reveal_candle
 
 
 class DrawingCanvas:
@@ -72,7 +73,7 @@ class ChartBoundsTests(unittest.TestCase):
 )
 class TkChartBoundsTests(unittest.TestCase):
     def setUp(self) -> None:
-        path = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc.csv"
+        path = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc_no_vol.csv"
         with path.open(newline="") as file:
             rows = list(csv.reader(file))[1:]
         self.price_data = [
@@ -85,47 +86,49 @@ class TkChartBoundsTests(unittest.TestCase):
         self.addCleanup(self.viz.window.destroy)
         self.viz.window.update()
 
+    def wick(self, index: int) -> int:
+        canvas = self.viz.canvas
+        return next(i for i in canvas.find_withtag(f"candle_{index}")
+                    if canvas.type(i) == "line")
+
+    def visible_date_labels(self) -> List[int]:
+        dates = self.viz.canvas_date
+        return [
+            i for i in dates.find_all()
+            if dates.type(i) == "text" and dates.itemcget(i, "state") == "normal"
+        ]
+
     def test_sample_data_candles_and_date_labels_are_reachable(self) -> None:
         canvas = self.viz.canvas
-        rectangles = [
-            item for item in canvas.find_all()
-            if canvas.type(item) == "rectangle" and "candle" in canvas.gettags(item)
-        ]
-        self.assertEqual(len(rectangles), len(self.price_data))
-        for item in rectangles:
-            x1, y1, x2, y2 = canvas.bbox(item)
-            self.assertGreater(x1, 0)
-            self.assertLess(x2, self.viz.chart_grid_space_x)
-            self.assertGreater(y1, 0)
-            self.assertLess(y2, self.viz.chart_grid_space_y)
-
+        dates = self.viz.canvas_date
+        last = len(self.price_data) - 1
         highest_index = max(
             range(len(self.price_data)), key=lambda i: self.price_data[i][2]
-        )
-        first_wick = rectangles[0] - 1
-        highest_wick = rectangles[highest_index] - 1
-        self.assertGreater(canvas.bbox(first_wick)[0], 0)
-        self.assertGreater(canvas.bbox(highest_wick)[1], 0)
-        dates = self.viz.canvas_date
-        text_items = [item for item in dates.find_all() if dates.type(item) == "text"]
-        self.assertGreater(dates.bbox(text_items[0])[0], 0)
-        self.assertLess(dates.bbox(text_items[-1])[2], self.viz.chart_grid_space_x)
-        self.assertAlmostEqual(
-            dates.coords(text_items[0])[0], canvas.coords(first_wick)[0]
         )
 
         canvas.xview_moveto(0)
         canvas.yview_moveto(0)
         self.viz.window.update()
-        self.assertGreaterEqual(canvas.bbox(first_wick)[0], canvas.canvasx(0))
-        self.assertGreaterEqual(canvas.bbox(highest_wick)[1], canvas.canvasy(0))
+        first_label = self.visible_date_labels()[0]
+        self.assertGreater(canvas.bbox(self.wick(0))[0], 0)
+        self.assertGreater(dates.bbox(first_label)[0], 0)
+        self.assertAlmostEqual(
+            dates.coords(first_label)[0], canvas.coords(self.wick(0))[0]
+        )
+
+        x1, y1, x2, y2 = reveal_candle(self.viz, highest_index)
+        self.assertGreater(y1, 0)
+        self.assertLess(y2, self.viz.chart_grid_space_y)
+        self.assertGreater(canvas.bbox(self.wick(highest_index))[1], 0)
+
         canvas.xview_moveto(1)
         self.viz.window.update()
         self.assertLessEqual(
-            canvas.bbox(rectangles[-1])[2], canvas.canvasx(canvas.winfo_width())
+            canvas.bbox(f"candle_{last}")[2], canvas.canvasx(canvas.winfo_width())
         )
         self.assertLessEqual(
-            dates.bbox(text_items[-1])[2], dates.canvasx(dates.winfo_width())
+            dates.bbox(self.visible_date_labels()[-1])[2],
+            dates.canvasx(dates.winfo_width()),
         )
 
         for _ in range(12):
@@ -136,13 +139,14 @@ class TkChartBoundsTests(unittest.TestCase):
         canvas.xview_moveto(0)
         canvas.yview_moveto(0)
         self.viz.window.update()
-        self.assertGreaterEqual(canvas.bbox(first_wick)[0], canvas.canvasx(0))
-        self.assertGreaterEqual(canvas.bbox(highest_wick)[1], canvas.canvasy(0))
-        self.assertGreaterEqual(dates.bbox(text_items[0])[0], dates.canvasx(0))
+        self.assertGreaterEqual(canvas.bbox(self.wick(0))[0], canvas.canvasx(0))
+        self.assertGreaterEqual(dates.bbox(self.visible_date_labels()[0])[0], dates.canvasx(0))
+        reveal_candle(self.viz, highest_index)
+        self.assertGreaterEqual(canvas.bbox(self.wick(highest_index))[1], canvas.canvasy(0))
         canvas.xview_moveto(1)
         self.viz.window.update()
         self.assertLessEqual(
-            canvas.bbox(rectangles[-1])[2], canvas.canvasx(canvas.winfo_width())
+            canvas.bbox(f"candle_{last}")[2], canvas.canvasx(canvas.winfo_width())
         )
 
 

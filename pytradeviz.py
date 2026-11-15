@@ -31,7 +31,8 @@ from indicators_help import (
 from sr_popups import SRPopup, popup_bounds
 from drawings import (
     BOX, DASHED, DOTTED, FIB, FILL_STIPPLE, LINE, SEGMENT, SEGMENT_CIRCLE_RADIUS, SOLID,
-    STYLE_DASHES, Drawing, Point, ToolKey, Toolbox, clip_line, fib_level_ys, fill_applicable,
+    TOOLBOX_FADE_STIPPLE,
+    STYLE_DASHES, Drawing, Point, ToolKey, Toolbox, clip_line, complementary_color, fib_level_ys, fill_applicable,
     hit_test, toolbox_layout,
 )
 from levels import (
@@ -41,6 +42,7 @@ from labeled_selections import (
     EXPORT_DIRECTORY, MOVING_AVERAGE_FIELDS, Selections, export_path, merge_selections,
     read_selections, write_selections,
 )
+from data_window import data_window_days, range_difference, row_ordinal, window_index_range
 from paginated_price_data import PaginatedPriceData
 from timeframes import (
     DAILY, TIMEFRAMES, candle_ids, candle_last_rows, shows_day_labels, timeframe_rows,
@@ -126,6 +128,9 @@ class ChartTabState:
 
 
 class PyTradeViz:
+    # Candle indexes whose items are shown, as (first, last) inclusive. See apply_data_window.
+    _applied_window: Tuple[int, int] = (0, -1)
+    _ordinals_cache: Optional[Tuple[Any, List[int]]] = None
 
     window_geo: str = "1020x750"
     window_min_width: int = 1020
@@ -196,6 +201,8 @@ class PyTradeViz:
     scrollbar_horizontal: ttk.Scrollbar
     scrollbar_vertical: ttk.Scrollbar
     load_more_button: ttk.Button
+    load_all_button: ttk.Button
+    load_frame: ttk.Frame
     dark_mode_button: ttk.Button
     theme_button_frame: ttk.Frame
     data_source: Optional[PriceDataSource]
@@ -571,6 +578,7 @@ class PyTradeViz:
         self._levels_items = []
         self._levels_cache = None
         self._timeframe_map_cache = None
+        self._applied_window = (0, -1)
 
         self.price_data_object = {"price_data": rows}
         self.price_data = rows
@@ -699,10 +707,13 @@ class PyTradeViz:
         self.ticker_label.lift()
 
     def update_load_more_button(self) -> None:
-        if self.data_source is None or not self.data_source.has_more:
-            self.load_more_button.state(["disabled"])
-        else:
-            self.load_more_button.state(["!disabled"])
+        has_more = self.data_source is not None and self.data_source.has_more
+        self.set_load_buttons_enabled(has_more)
+
+    def set_load_buttons_enabled(self, enabled: bool) -> None:
+        state = "!disabled" if enabled else "disabled"
+        for button in (self.load_more_button, self.load_all_button):
+            button.state([state])
 
     def open_reset_window(self, tk: ModuleType) -> None:
         window = self.open_modal_window(tk, "Reset")
@@ -1347,9 +1358,17 @@ class PyTradeViz:
         self.scrollbar_vertical = ttk.Scrollbar(
             self.window, orient=tk.VERTICAL, command=self.scroll_yview
         )
+        # The two load buttons share one grid cell, so ">>>" sits beside ">".
+        self.load_frame = ttk.Frame(self.window)
         self.load_more_button = ttk.Button(
-            self.window, text=">", width=1, command=self.load_more_data
+            self.load_frame, text=">", width=1, command=self.load_more_data
         )
+        self.load_all_button = ttk.Button(
+            self.load_frame, text=">|", width=3, command=self.load_all_data
+        )
+        self.load_frame.grid_rowconfigure(0, weight=1)
+        self.load_more_button.grid(row=0, column=0, sticky="nsew")
+        self.load_all_button.grid(row=0, column=1, sticky="nsew")
         self.update_load_more_button()
 
     def initialize_frames(self, ttk: ModuleType) -> None:
@@ -1410,7 +1429,7 @@ class PyTradeViz:
         self.bottom_bar.grid(row=4, column=0, sticky="ew")
         self.mode_button_frame.pack(side="right")
         self.scrollbar_horizontal.pack(side="left", fill="x", expand=True)
-        self.load_more_button.grid(row=3, column=1, sticky="nsw")
+        self.load_frame.grid(row=3, column=1, sticky="nsw")
         self.theme_button_frame.grid(row=2, column=1, sticky="nsw")
         self.scrollbar_vertical.grid(row=1, column=2, sticky="ns")
         self.canvas.grid(row=0, column=0, sticky="nsew")
@@ -1429,8 +1448,13 @@ class PyTradeViz:
                 tags=("candle", f"candle_{i}") + tags
             )
             c.draw_candle(self.canvas, hollow=self.dark_mode)
+        self.hide_outside_window("candle", start)
 
     def render_indicators(self, start: int = 0, tags: Tuple[str, ...] = ()) -> None:
+        self.render_indicator_series(start, tags)
+        self.hide_outside_window("ind", start)
+
+    def render_indicator_series(self, start: int = 0, tags: Tuple[str, ...] = ()) -> None:
         ink = self.get_theme()["ink"]
         settings = self.indicator_settings
         if self.indicator_mode == "ADX":
@@ -1642,13 +1666,13 @@ class PyTradeViz:
                 m = im
                 m_name = datetime.datetime.strptime(str(m), "%m").strftime("%b")[:2]
 
-                self.canvas_date.create_text(self.chart_padding_x + i*self.chart_grid_divider_v, 10, text=m_name, fill=ink, tags=("ink",) + tags)
+                self.canvas_date.create_text(self.chart_padding_x + i*self.chart_grid_divider_v, 10, text=m_name, fill=ink, tags=("ink", f"date_{i}") + tags)
             if iy != str(y):
                 y = iy
-                self.canvas_date.create_text(self.chart_padding_x + i*self.chart_grid_divider_v, 30, text="Y"+str(iy)[2:], fill=ink, tags=("ink",) + tags)
+                self.canvas_date.create_text(self.chart_padding_x + i*self.chart_grid_divider_v, 30, text="Y"+str(iy)[2:], fill=ink, tags=("ink", f"date_{i}") + tags)
             elif show_days:
-                self.canvas_date.create_text(self.chart_padding_x + i*self.chart_grid_divider_v, 30, text=str(id), fill=ink, tags=("ink",) + tags)
-        pass
+                self.canvas_date.create_text(self.chart_padding_x + i*self.chart_grid_divider_v, 30, text=str(id), fill=ink, tags=("ink", f"date_{i}") + tags)
+        self.hide_outside_window("date", start)
 
     def get_window(self) -> tk.Tk:
         return self.window
@@ -1888,23 +1912,50 @@ class PyTradeViz:
         self.draw_overlays()
 
     def load_more_data(self) -> None:
+        self.load_pages(pages=1)
+
+    def load_all_data(self) -> None:
+        """Load every remaining window and show the newest candles."""
+        self.load_pages(pages=None, to_end=True)
+
+    def load_pages(self, pages: Optional[int], to_end: bool = False) -> None:
+        """Load the next ``pages`` windows, or all remaining windows when pages is None."""
         if self.data_source is None or not self.data_source.has_more:
             return
 
-        old_count = len(self.price_data)
+        new_rows: List[List[Any]] = []
+        error: Optional[Exception] = None
+        exhausted = False
+        loaded = 0
         try:
-            new_rows = self.data_source.load_next()
-        except (csv.Error, OSError, ValueError) as error:
-            messagebox.showerror("Unable to load price data", str(error), parent=self.window)
-            return
-        if not new_rows:
-            self.load_more_button.state(["disabled"])
-            return
+            while self.data_source.has_more and (pages is None or loaded < pages):
+                page = self.data_source.load_next()
+                if not page:
+                    exhausted = True
+                    break
+                new_rows.extend(page)
+                loaded += 1
+        except (csv.Error, OSError, ValueError) as exc:
+            error = exc
 
+        if new_rows:
+            self.append_loaded_rows(new_rows, to_end)
+        if exhausted:
+            self.set_load_buttons_enabled(False)
+        else:
+            self.update_load_more_button()
+        if error is not None:
+            messagebox.showerror("Unable to load price data", str(error), parent=self.window)
+
+    def append_loaded_rows(self, new_rows: List[List[Any]], to_end: bool = False) -> None:
         if self.active_timeframe != DAILY:
             self.extend_active_timeframe(new_rows)
+            if to_end:
+                self.canvas.xview_moveto(1.0)
+                self.draw_overlays()
             return
 
+        old_count = len(self.price_data)
         old_width = self.chart_grid_space_x
         old_base_width = self._base_chart_width
         old_left = self.canvas.xview()[0] * old_width
@@ -1958,14 +2009,15 @@ class PyTradeViz:
                 canvas.coords(item, x1, y1, self.chart_grid_space_x, y2)
 
         self.update_scroll_regions()
-        self.canvas.xview_moveto(old_left / self.chart_grid_space_x)
+        if to_end:
+            self.canvas.xview_moveto(1.0)
+        else:
+            self.canvas.xview_moveto(old_left / self.chart_grid_space_x)
         self.canvas.yview_moveto(
             max(0, (old_top * ratio + shift) / self.chart_grid_space_y)
         )
-        if not self.data_source.has_more:
-            self.load_more_button.state(["disabled"])
         self.draw_overlays()
-        
+
     def extend_active_timeframe(self, new_rows: List[List[Any]]) -> None:
         """Append daily rows while a derived tab is shown, then rebuild that tab at the same view."""
         self.store_tab_state()
@@ -2378,10 +2430,11 @@ class PyTradeViz:
                 dash=self.sma_line_styles[settings["style"]],
                 width=self.sma_line_widths[settings["style"]],
                 tags=("sma", f"sma_{period}"),
+                index_range=self._applied_window,
             ))
             if settings["hi_lo"]:
-                # Markers are only created for the visible part of the chart.
-                x_range = (self.canvas.canvasx(0), self.canvas.canvasx(self.canvas.winfo_width()))
+                # Markers are only created for the visible part of the chart inside the data window.
+                x_range = self.drawable_x_range()
                 for column in (HIGH_COLUMN, LOW_COLUMN):
                     self._sma_items.extend(self.indicators_object.render_SMA_markers(
                         self.canvas, period, column,
@@ -2407,6 +2460,7 @@ class PyTradeViz:
                 dash=self.sma_line_styles[settings["style"]],
                 width=self.sma_line_widths[settings["style"]],
                 tags=("bollinger", f"bollinger_{name}"),
+                index_range=self._applied_window,
             ))
 
     def trend_volumes(self) -> Optional[List[float]]:
@@ -2451,7 +2505,10 @@ class PyTradeViz:
         half_width = self.chart_grid_divider_v * self._scale_x / 2
         # Consecutive candles with the same state share one rectangle.
         runs: List[List[Any]] = []
-        for index, (state, _adx) in enumerate(self.trend_details()):
+        details = self.trend_details()
+        first, last = self._applied_window
+        for index in range(max(first, 0), min(last, len(details) - 1) + 1):
+            state, _adx = details[index]
             if state is None:
                 continue
             if runs and runs[-1][2] == state and runs[-1][1] == index - 1:
@@ -2652,9 +2709,9 @@ class PyTradeViz:
                               dash: Tuple[int, ...], tags: Tuple[str, ...]) -> Optional[int]:
         """A straight line at ``price`` from candle start to end, clipped to the view.
 
-        Returns None when the line lies outside the view.
+        Returns None when the line lies outside the view or the data window.
         """
-        left, right = self.visible_x_range()
+        left, right = self.drawable_x_range()
         x0 = max(self.candle_x(start), left)
         x1 = min(self.candle_x(end), right)
         if x0 > x1:
@@ -2669,16 +2726,78 @@ class PyTradeViz:
         return self.canvas.canvasx(0), self.canvas.canvasx(self.canvas.winfo_width())
 
     def visible_candle_range(self) -> Tuple[int, int]:
-        """Return the first and last candle indexes that fall inside the visible canvas."""
+        """Return the first and last candle indexes that fall inside the visible canvas and data window."""
         left, right = self.visible_x_range()
         first = math.floor((left / self._scale_x - self.chart_padding_x)
                            / self.chart_grid_divider_v)
         last = math.floor((right / self._scale_x - self.chart_padding_x)
                           / self.chart_grid_divider_v)
         last_index = len(self.price_data or []) - 1
-        return max(0, first), min(last_index, last)
+        window_first, window_last = self._applied_window
+        return max(0, first, window_first), min(last_index, last, window_last)
+
+    def drawable_x_range(self) -> Tuple[float, float]:
+        """The visible x range, limited to the candles inside the data window.
+
+        When the window is empty the range is inverted, so nothing passes a left-to-right check.
+        """
+        left, right = self.visible_x_range()
+        first, last = self._applied_window
+        if first > last:
+            return left, left - 1
+        half = self.chart_grid_divider_v * self._scale_x / 2
+        return max(left, self.candle_x(first) - half), min(right, self.candle_x(last) + half)
+
+    def data_window_range(self) -> Tuple[int, int]:
+        """Candle indexes within half the active tab's data window either side of the chart view centre."""
+        rows = self.price_data or []
+        key = (id(rows), len(rows),
+               rows[0][0] if rows else None, rows[-1][0] if rows else None)
+        if self._ordinals_cache is None or self._ordinals_cache[0] != key:
+            self._ordinals_cache = (key, [row_ordinal(row) for row in rows])
+        left, right = self.visible_x_range()
+        centre = ((left + right) / 2 / self._scale_x - self.chart_padding_x) / self.chart_grid_divider_v
+        return window_index_range(self._ordinals_cache[1], centre, data_window_days(self.active_timeframe))
+
+    def window_canvas(self, kind: str) -> tk.Canvas:
+        return {"candle": self.canvas, "date": self.canvas_date, "ind": self.canvas_indicators}[kind]
+
+    def window_range_for(self, kind: str, window: Tuple[int, int]) -> Tuple[int, int]:
+        """The candle indexes of ``kind`` items that show for ``window``.
+
+        An indicator segment joins the previous candle to its own, so both ends must be
+        inside the window. That keeps the segment from overhanging the edge.
+        """
+        first, last = window
+        return (first + 1, last) if kind == "ind" else (first, last)
+
+    def hide_outside_window(self, kind: str, start: int) -> None:
+        """Hide items of ``kind`` created for candles from ``start`` on, when outside the applied window."""
+        first, last = self.window_range_for(kind, self._applied_window)
+        canvas = self.window_canvas(kind)
+        for i in range(start, len(self.price_data)):
+            if not first <= i <= last:
+                canvas.itemconfigure(f"{kind}_{i}", state="hidden")
+
+    def apply_data_window(self) -> None:
+        """Show the items inside the data window and hide those outside it.
+
+        Only the candles that change state are touched. Overlays read the new window
+        in the same redraw.
+        """
+        old = self._applied_window
+        new = self.data_window_range()
+        self._applied_window = new
+        for kind in ("candle", "date", "ind"):
+            old_range = self.window_range_for(kind, old)
+            new_range = self.window_range_for(kind, new)
+            for i in range_difference(new_range, old_range):
+                self.window_canvas(kind).itemconfigure(f"{kind}_{i}", state="normal")
+            for i in range_difference(old_range, new_range):
+                self.window_canvas(kind).itemconfigure(f"{kind}_{i}", state="hidden")
 
     def draw_overlays(self) -> None:
+        self.apply_data_window()
         self.thin_price_labels()
         self.draw_trend_shading()
         self.draw_selection_box()
@@ -2772,21 +2891,42 @@ class PyTradeViz:
         self, drawing: Drawing, p1: Point, p2: Point, width: int, dash: Tuple[int, ...],
         cap: str, tags: Tuple[str, ...],
     ) -> None:
-        """A retracement: one horizontal line per level across the anchors, labelled at the right.
+        """A retracement, drawn in three parts.
 
-        Each label gives the level's percentage and its price, which is interpolated from the
-        two anchor prices in the same way as the line's position.
+        A dotted diagonal joins the two anchors in the complementary colour. Each level is a
+        line in the drawing's style across the box spanned by the anchors, and a dotted line
+        beyond each side of the box out to the edges of the view. Each label gives the level's
+        percentage and its price, which is interpolated from the two anchor prices in the same
+        way as the line's position.
         """
+        view_left, _, view_right, _ = self.canvas_view_bounds()
         left, right = sorted((p1[0], p2[0]))
+        background = self.get_theme()["canvas"]
+        self.canvas.create_line(
+            *p1, *p2, fill=complementary_color(drawing.color), width=width,
+            dash=STYLE_DASHES[DOTTED], capstyle="round", tags=tags)
         start_price, end_price = drawing.start[1], drawing.end[1]
         for ratio, level_y in fib_level_ys(p1, p2):
             self.canvas.create_line(
                 left, level_y, right, level_y, fill=drawing.color, width=width,
                 dash=dash, capstyle=cap, tags=tags)
+            if left > view_left:
+                self.canvas.create_line(
+                    view_left, level_y, left, level_y, fill=drawing.color, width=width,
+                    dash=STYLE_DASHES[DOTTED], capstyle="round", tags=tags)
+            if right < view_right:
+                self.canvas.create_line(
+                    right, level_y, view_right, level_y, fill=drawing.color, width=width,
+                    dash=STYLE_DASHES[DOTTED], capstyle="round", tags=tags)
             price = end_price - ratio * (end_price - start_price)
-            self.canvas.create_text(
+            label = self.canvas.create_text(
                 right + 4, level_y, anchor="w", fill=drawing.color, tags=tags,
                 text=f"{ratio * 100:.1f}%  {price:.2f}")
+            # The label sits on the dotted extension, so it is backed by the canvas colour.
+            x1, y1, x2, y2 = self.canvas.bbox(label)
+            self.canvas.create_rectangle(
+                x1 - 2, y1, x2 + 2, y2, fill=background, outline="", tags=tags)
+            self.canvas.tag_raise(label)
 
     def draw_toolbox(self) -> None:
         self.canvas.delete("toolbox")
@@ -2796,10 +2936,11 @@ class PyTradeViz:
         theme = self.get_theme()
         toolbox = toolbox_layout(self.canvas_view_bounds(), tuple(self.sma_colors))
         self._toolbox = toolbox
+        # Stippled while a feature is being drawn or moved, so candles behind the toolbox show through.
+        stipple = TOOLBOX_FADE_STIPPLE if self.toolbox_faded() else ""
         left, top, right, bottom = toolbox.bounds
-        self.canvas.create_rectangle(
-            left, top, right, bottom, fill=theme["canvas"], outline=theme["ink"],
-            tags=("toolbox",))
+        self.create_toolbox_box(
+            left, top, right, bottom, fill=theme["canvas"], outline=theme["ink"], stipple=stipple)
         for button in toolbox.buttons:
             enabled = self.toolbox_enabled(button.key)
             active = enabled and self.toolbox_active(button.key)
@@ -2812,17 +2953,36 @@ class PyTradeViz:
             b_left, b_top, b_right, b_bottom = button.bounds
             if button.key[0] == "color":
                 # A swatch shows its colour; the active one gets a heavier outline.
-                self.canvas.create_rectangle(
+                self.create_toolbox_box(
                     b_left, b_top, b_right, b_bottom,
                     fill=self.sma_colors[button.key[1]], outline=theme["ink"],
-                    width=3 if active else 1, tags=("toolbox",))
+                    width=3 if active else 1, stipple=stipple)
                 continue
-            self.canvas.create_rectangle(
-                b_left, b_top, b_right, b_bottom, fill=fill, outline=theme["ink"],
-                tags=("toolbox",))
+            self.create_toolbox_box(
+                b_left, b_top, b_right, b_bottom, fill=fill, outline=theme["ink"], stipple=stipple)
             self.canvas.create_text(
                 (b_left + b_right) / 2, (b_top + b_bottom) / 2, text=button.text,
-                fill=text_fill, tags=("toolbox",))
+                fill=text_fill, stipple=stipple, tags=("toolbox",))
+
+    def toolbox_faded(self) -> bool:
+        gesture = self._draw_gesture
+        return gesture is not None and gesture["kind"] in ("draw", "move") and gesture["moved"]
+
+    def create_toolbox_box(
+        self, left: float, top: float, right: float, bottom: float, fill: str, outline: str,
+        width: int = 1, stipple: str = "",
+    ) -> None:
+        """Draw a toolbox box. Tk cannot stipple an outline, so a faded box draws its outline as stippled lines."""
+        if not stipple:
+            self.canvas.create_rectangle(
+                left, top, right, bottom, fill=fill, outline=outline, width=width,
+                tags=("toolbox",))
+            return
+        self.canvas.create_rectangle(
+            left, top, right, bottom, fill=fill, stipple=stipple, outline="", tags=("toolbox",))
+        corners = (left, top, right, top, right, bottom, left, bottom, left, top)
+        self.canvas.create_line(
+            *corners, fill=outline, width=width, stipple=stipple, tags=("toolbox",))
 
     def toolbox_enabled(self, key: ToolKey) -> bool:
         # The fill row only applies to box and ellipse.

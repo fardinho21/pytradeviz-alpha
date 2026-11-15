@@ -17,13 +17,23 @@ from pytradeviz import PyTradeViz
 
 
 def load_price_rows() -> List[List[Any]]:
-    path = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc.csv"
+    path = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc_no_vol.csv"
     with path.open(newline="") as file:
         rows = list(csv.reader(file))[1:]
     return [
         [row[0].split("-"), *(float(v) for v in row[1:5]), {"rsi": None}]
         for row in rows
     ]
+
+
+def reveal_candle(viz, index: int) -> Tuple[float, float, float, float]:
+    """Scroll a candle into view when the 1-year data window currently hides it, then return its bounds."""
+    canvas = viz.canvas
+    if canvas.bbox(f"candle_{index}") is None:
+        total = canvas.bbox("all")[2]
+        canvas.xview_moveto(max(0.0, (viz.candle_x(index) - canvas.winfo_width() / 2) / total))
+        viz.window.update()
+    return canvas.bbox(f"candle_{index}")
 
 
 @unittest.skipUnless(
@@ -40,7 +50,7 @@ class RoiTests(unittest.TestCase):
         self.viz.window.update()
 
     def candle_center(self, index: int) -> Tuple[float, float]:
-        x1, y1, x2, y2 = self.viz.canvas.bbox(f"candle_{index}")
+        x1, y1, x2, y2 = reveal_candle(self.viz, index)
         return (x1 + x2) / 2, (y1 + y2) / 2
 
     def event_at(self, x: float, y: float) -> SimpleNamespace:
@@ -237,9 +247,10 @@ class RoiTests(unittest.TestCase):
 
     def test_roi_drag_does_not_pan_the_chart(self) -> None:
         self.viz.toggle_roi_mode()
+        start_x = self.candle_center(10)[0]
+        end_x = self.candle_center(200)[0]
         before = self.viz.canvas.xview()
-        self.drag((self.candle_center(10)[0], self.visible_y(120)),
-                  (self.candle_center(200)[0], self.visible_y(320)))
+        self.drag((start_x, self.visible_y(120)), (end_x, self.visible_y(320)))
         self.assertEqual(self.viz.canvas.xview(), before)
 
 

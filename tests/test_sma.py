@@ -151,7 +151,8 @@ class SimpleMovingAverageWindowTests(unittest.TestCase):
         canvas = self.viz.canvas
         (item,) = self.sma_items(3)
         coords = canvas.coords(item)
-        self.assertEqual(len(coords), 2 * (len(self.viz.price_data) - 2))
+        first, last = self.viz._applied_window
+        self.assertEqual(len(coords), 2 * (last - max(first, 2) + 1))
         self.assertAlmostEqual(coords[0], canvas.coords(self.candle_line(2))[0])
         first_close_avg = sum(row[4] for row in self.viz.price_data[:3]) / 3
         self.assertAlmostEqual(coords[1], self.viz.price_to_y(first_close_avg), places=6)
@@ -258,7 +259,7 @@ class SimpleMovingAverageWindowTests(unittest.TestCase):
         self.assertEqual(len(self.sma_items(3)), 1)
 
     def test_lines_extend_after_loading_more_data(self) -> None:
-        path = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc.csv"
+        path = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc_no_vol.csv"
         source = PaginatedPriceData(path)
         with contextlib.redirect_stdout(io.StringIO()):
             viz = PyTradeViz(tk, ttk, {"price_data": source.load_initial()}, data_source=source)
@@ -269,10 +270,12 @@ class SimpleMovingAverageWindowTests(unittest.TestCase):
 
         viz.load_more_button.invoke()
         viz.window.update()
+        viz.canvas.xview_moveto(1.0)
+        viz.window.update()
         (item,) = viz.canvas.find_withtag("sma_30")
         coords = viz.canvas.coords(item)
-        self.assertEqual(len(coords), 2 * (len(viz.price_data) - 29))
-        last_index = len(viz.price_data) - 1
+        first, last_index = viz._applied_window
+        self.assertEqual(len(coords), 2 * (last_index - max(first, 29) + 1))
         last_line = next(i for i in viz.canvas.find_withtag(f"candle_{last_index}")
                          if viz.canvas.type(i) == "line")
         self.assertAlmostEqual(coords[-2], viz.canvas.coords(last_line)[0])

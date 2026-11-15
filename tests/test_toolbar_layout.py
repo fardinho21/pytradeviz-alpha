@@ -26,6 +26,12 @@ class ToolbarLayoutTests(unittest.TestCase):
         self.viz.window.geometry("1200x800")
         self.viz.window.update()
 
+    def test_load_buttons_span_the_indicator_row_height(self) -> None:
+        self.viz.window.update()
+        indicator_height = self.viz.canvas_indicators.winfo_height()
+        self.assertEqual(self.viz.load_more_button.winfo_height(), indicator_height)
+        self.assertEqual(self.viz.load_all_button.winfo_height(), indicator_height)
+
     def test_roi_button_is_sized_to_its_text(self) -> None:
         text_width = tkfont.nametofont("TkDefaultFont").measure("ROI")
         self.assertLessEqual(self.viz.roi_button.winfo_reqwidth(), text_width + 16)

@@ -10,7 +10,7 @@ from tkinter import ttk
 from types import SimpleNamespace
 from typing import Tuple
 
-from drawings import BOX, DASHED, DOTTED, ELLIPSE, LINE, SEGMENT
+from drawings import BOX, DASHED, DOTTED, ELLIPSE, LINE, SEGMENT, TOOLBOX_FADE_STIPPLE
 from pytradeviz import PyTradeViz
 from test_roi import load_price_rows
 
@@ -332,6 +332,37 @@ class DrawModeTests(unittest.TestCase):
         self.draw((100, 100), (220, 180))
         item = self.drawing_items(self.viz.drawings[-1].id)[0]
         self.assertEqual(self.viz.canvas.itemcget(item, "stipple"), "")
+
+    def toolbox_stipples(self) -> set:
+        canvas = self.viz.canvas
+        return {canvas.itemcget(item, "stipple") for item in canvas.find_withtag("toolbox")}
+
+    def test_toolbox_fades_while_drawing_and_restores_after_release(self) -> None:
+        self.set_tool(SEGMENT)
+        self.press(100, 100)
+        self.drag(220, 140)
+        self.assertEqual(self.toolbox_stipples(), {TOOLBOX_FADE_STIPPLE})
+        self.release(220, 140)
+        self.viz.window.update()
+        self.assertEqual(self.toolbox_stipples(), {""})
+
+    def test_toolbox_fades_while_moving_a_drawing(self) -> None:
+        self.set_tool(SEGMENT)
+        self.draw((100, 100), (220, 140))
+        self.viz.activate_draw_button(("tool", SEGMENT))
+        self.press(160, 120)
+        self.drag(180, 140)
+        self.assertEqual(self.toolbox_stipples(), {TOOLBOX_FADE_STIPPLE})
+        self.release(180, 140)
+        self.viz.window.update()
+        self.assertEqual(self.toolbox_stipples(), {""})
+
+    def test_toolbox_does_not_fade_for_a_click_without_movement(self) -> None:
+        self.set_tool(SEGMENT)
+        self.press(100, 100)
+        self.viz.window.update()
+        self.assertEqual(self.toolbox_stipples(), {""})
+        self.release(100, 100)
 
 
 if __name__ == "__main__":

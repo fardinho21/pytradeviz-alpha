@@ -7,6 +7,7 @@ canvas coordinates. A bounds tuple is (left, top, right, bottom).
 
 from __future__ import annotations
 
+import colorsys
 import math
 from dataclasses import dataclass, replace
 from typing import Any, List, Optional, Sequence, Tuple
@@ -35,6 +36,8 @@ HIT_TOLERANCE = 6
 
 # Solid fills use a stipple so the candles underneath still show through.
 FILL_STIPPLE = "gray50"
+# The toolbox fades to this stipple while a feature is being drawn or moved (about 25% coverage).
+TOOLBOX_FADE_STIPPLE = "gray25"
 
 BUTTON_WIDTH = 80
 SWATCH_WIDTH = 24
@@ -113,6 +116,17 @@ def fib_level_ys(p1: Point, p2: Point) -> List[Tuple[float, float]]:
     Price is linear in canvas y, so the levels are placed directly in canvas units.
     """
     return [(ratio, p2[1] + ratio * (p1[1] - p2[1])) for ratio in FIB_LEVELS]
+
+
+def complementary_color(hex_color: str) -> str:
+    """The colour opposite on the hue wheel, with the same saturation and brightness.
+
+    Takes and returns "#rrggbb" strings. Greys have no hue, so they come back unchanged.
+    """
+    red, green, blue = (int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5))
+    hue, saturation, value = colorsys.rgb_to_hsv(red, green, blue)
+    red, green, blue = colorsys.hsv_to_rgb((hue + 0.5) % 1.0, saturation, value)
+    return "#{:02x}{:02x}{:02x}".format(*(round(channel * 255) for channel in (red, green, blue)))
 
 
 def hit_test(kind: str, p1: Point, p2: Point, x: float, y: float,

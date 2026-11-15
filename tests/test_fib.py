@@ -11,7 +11,8 @@ from types import SimpleNamespace
 from typing import Tuple
 
 from drawings import (
-    BOX, ELLIPSE, FIB, FIB_LEVELS, LINE, SEGMENT, Drawing, fib_level_ys, hit_test, toolbox_rows,
+    BOX, ELLIPSE, FIB, FIB_LEVELS, LINE, SEGMENT, SOLID, Drawing, complementary_color,
+    fib_level_ys, hit_test, toolbox_rows,
 )
 from pytradeviz import PyTradeViz
 from test_roi import load_price_rows
@@ -25,6 +26,17 @@ class FibGeometryTests(unittest.TestCase):
         self.assertEqual(levels[0.0], 100.0)
         self.assertEqual(levels[1.0], 300.0)
         self.assertAlmostEqual(levels[0.5], 200.0)
+
+    def test_complementary_color_is_opposite_on_the_hue_wheel(self):
+        self.assertEqual(complementary_color("#ff0000"), "#00ffff")
+        self.assertEqual(complementary_color("#0000ff"), "#ffff00")
+        self.assertEqual(complementary_color("#808080"), "#808080")
+
+    def test_complementary_color_round_trips_within_rounding(self):
+        original = "#1e88e5"
+        back = complementary_color(complementary_color(original))
+        for index in (1, 3, 5):
+            self.assertLessEqual(abs(int(original[index:index + 2], 16) - int(back[index:index + 2], 16)), 1)
 
     def test_hit_test_finds_a_level_inside_the_anchor_span(self):
         p1, p2 = (100.0, 300.0), (200.0, 100.0)
@@ -123,10 +135,7 @@ class FibToolTests(unittest.TestCase):
         self.assertEqual(len(self.viz.drawings), 1)
         drawing = self.viz.drawings[0]
         self.assertEqual(drawing.kind, FIB)
-        items = self.fib_items(drawing)
-        lines = [i for i in items if self.viz.canvas.type(i) == "line"]
-        labels = [i for i in items if self.viz.canvas.type(i) == "text"]
-        self.assertEqual(len(lines), len(FIB_LEVELS))
+        labels = [i for i in self.fib_items(drawing) if self.viz.canvas.type(i) == "text"]
         self.assertEqual(len(labels), len(FIB_LEVELS))
 
     def test_labels_show_percentage_and_price(self):
@@ -140,6 +149,52 @@ class FibToolTests(unittest.TestCase):
         expected = f"50.0%  {end_price - 0.5 * (end_price - start_price):.2f}"
         self.assertIn(expected, texts)
         self.assertIn("0.0%  " + f"{end_price:.2f}", texts)
+
+    def test_anchors_are_joined_by_a_dotted_complementary_diagonal(self):
+        self.press_fib_button()
+        self.draw((100, 100), (220, 200))
+        drawing = self.viz.drawings[0]
+        (x1, y1), (x2, y2) = self.viz.drawing_points(drawing)
+        canvas = self.viz.canvas
+        diagonals = [i for i in self.fib_items(drawing)
+                     if canvas.type(i) == "line" and canvas.coords(i)[1] != canvas.coords(i)[3]]
+        self.assertEqual(len(diagonals), 1)
+        item = diagonals[0]
+        for actual, expected in zip(canvas.coords(item), (x1, y1, x2, y2)):
+            self.assertAlmostEqual(actual, expected)
+        self.assertEqual(canvas.itemcget(item, "dash"), "2 4")
+        self.assertEqual(canvas.itemcget(item, "fill"), complementary_color(drawing.color))
+
+    def test_levels_are_solid_inside_the_box_and_dotted_beyond_it(self):
+        self.press_fib_button()
+        self.draw((100, 100), (220, 200))
+        drawing = self.viz.drawings[0]
+        self.assertEqual(drawing.style, SOLID)
+        points = self.viz.drawing_points(drawing)
+        left, right = sorted((points[0][0], points[1][0]))
+        view_left, _, view_right, _ = self.viz.canvas_view_bounds()
+        self.assertLess(view_left, left)
+        self.assertLess(right, view_right)
+        canvas = self.viz.canvas
+        for _, level_y in fib_level_ys(*points):
+            segments = []
+            for item in self.fib_items(drawing):
+                if canvas.type(item) != "line":
+                    continue
+                x_a, y_a, x_b, y_b = canvas.coords(item)
+                if y_a == y_b and abs(y_a - level_y) < 1e-6:
+                    segments.append((min(x_a, x_b), max(x_a, x_b), canvas.itemcget(item, "dash")))
+            segments.sort()
+            solid = [(a, b) for a, b, dash in segments if dash == ""]
+            dotted = [(a, b) for a, b, dash in segments if dash == "2 4"]
+            self.assertEqual(len(solid), 1)
+            self.assertAlmostEqual(solid[0][0], left)
+            self.assertAlmostEqual(solid[0][1], right)
+            self.assertEqual(len(dotted), 2)
+            self.assertAlmostEqual(dotted[0][0], view_left)
+            self.assertAlmostEqual(dotted[0][1], left)
+            self.assertAlmostEqual(dotted[1][0], right)
+            self.assertAlmostEqual(dotted[1][1], view_right)
 
     def test_retracement_is_not_filled_even_if_fill_was_chosen(self):
         self.press_fib_button()

@@ -18,11 +18,20 @@ each timestamp must be unique. OHLC values may have a leading `$`. Ambiguous
 formats such as `MM/DD/YYYY` are not accepted. The asset ticker is the first
 value of a `symbol` column, or else a lone line above the header that is not a
 URL. The top-left corner shows that ticker and the close of the last candle
-loaded; the ticker is omitted when the file names none. The `data/XRP_4_year_ohlc.csv`
+loaded; the ticker is omitted when the file names none. The `data/XRP_4_year_ohlc_no_vol.csv`
 sample and `data/AMZN_10_year_OHLC.csv` are examples. Opening a file shows its oldest year of data. Use the
-**+3 months →** button at the bottom right to append the next three calendar
-months; the button is disabled when all data has been loaded. Missing dates do
+**>** button at the bottom right to append the next three calendar months. The
+**>>>** button beside it loads all remaining data and jumps the view to the newest
+candle. Both buttons are disabled when all data has been loaded. Missing dates do
 not create synthetic candles.
+
+Only one year of data is drawn at a time on the Daily tab, four years on the 2W tab, and
+six years on the 1M, 2M, 3M, and 6M tabs. The window is centred on the middle of the visible chart and
+spans half of its length on either side, so candles, dates, and active indicators outside
+it are not drawn. Scrolling back into that range redraws
+them. Drawings (lines, levels, Fibonacci retracements, and labeled selections) keep
+their position even when they are outside the window. All data stays in memory, so
+the window only affects drawing, not loading. The vertical price scale still uses all loaded data.
 
 Drag the chart to pan, use the scrollbars, or hold Ctrl and use the mouse wheel
 to zoom. Click a candle to show its date and open, high, low, and close values
@@ -74,10 +83,13 @@ The pencil button beside the light/dark mode toggle enters draw mode, which show
 has four rows of options. The first row selects the feature to draw: Line, Segment, Box,
 Ellipse, or Fib. Only one can be on at a time, and clicking the active feature turns it off. A
 Line spans the full width of the chart. A Segment has a hollow circle at each end. A Fib
-(Fibonacci retracement) is drawn by dragging from the start point to the end point. It
-draws horizontal lines at 0, 23.6, 38.2, 50, 61.8, 78.6, and 100% of the move, spanning
-the two anchors, each labelled with its percentage and price. The 0% line sits at the
-end point and the 100% line at the start point. The FIB button beside the pencil button
+(Fibonacci retracement) is drawn by dragging from the start point to the end point. A
+dotted diagonal joins the two points in the complementary colour of the levels. It draws
+horizontal lines at 0, 23.6, 38.2, 50, 61.8, 78.6, and 100% of the move. Each line is solid
+across the box spanned by the two anchors and dotted beyond it, out to the edges of the
+chart. Each line is labelled with its percentage and price, and the label sits on a
+background that stops the dotted extension. The 0% line sits at the end point and the 100%
+line at the start point. The FIB button beside the pencil button
 enters draw mode with the Fib feature selected and shows a "fib mode" label. Clicking it
 again leaves draw mode. The
 second row chooses the style, Solid, Dashed, or Dotted, which is applied to each new
@@ -88,8 +100,9 @@ row of colour swatches using the indicator colours. The active swatch has a thic
 outline. Colour applies to new drawings only, and existing drawings keep their colour.
 The last row has Undo,
 Delete (removes the selected drawing), and Clear (removes all drawings). Drag on the chart
-with a feature selected to draw. Click a drawing to select it, then drag it to move it. Hovering
-over a drawing shows a move cursor. Drawings can only be moved in draw mode, and they stay
+with a feature selected to draw. Click a drawing to select it, then drag it to move it. While
+a drawing is being drawn or moved, the toolbox fades to a stipple pattern so the candles behind
+it stay visible. It returns to solid on release. Hovering over a drawing shows a move cursor. Drawings can only be moved in draw mode, and they stay
 fixed when you press Escape, which leaves the mode. Drawings are stored in candle and price
 units, so they stay in place when you zoom, scroll, or resize. Opening a new data file clears
 them. Drawings, including Fib retracements, are stored per tab. A retracement appears only on

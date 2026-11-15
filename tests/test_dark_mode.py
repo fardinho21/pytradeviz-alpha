@@ -34,7 +34,7 @@ class FakeSource:
 
 
 def load_price_rows() -> List[List[Any]]:
-    path = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc.csv"
+    path = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc_no_vol.csv"
     with path.open(newline="") as file:
         rows = list(csv.reader(file))[1:]
     return [
