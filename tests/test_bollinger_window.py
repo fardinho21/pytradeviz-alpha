@@ -6,6 +6,7 @@ import tkinter as tk
 import unittest
 from tkinter import ttk
 from typing import Any, List
+from unittest import mock
 
 from pytradeviz import PyTradeViz
 from test_roi import load_price_rows
@@ -130,6 +131,71 @@ class BollingerWindowTests(unittest.TestCase):
         self.assertEqual(record["bollinger_middle"], middle[25])
         self.assertEqual(record["bollinger_upper"], upper[25])
         self.assertEqual(record["bollinger_lower"], lower[25])
+
+    def set_entry_text(self, window: tk.Misc, index: int, text: str) -> None:
+        # Entries are created in order: period first, then the standard deviation multiplier.
+        entry = self.descendants(window, tk.Entry)[index]
+        entry.delete(0, "end")
+        entry.insert(0, text)
+
+    def test_bollinger_menu_item_opens_the_modal_directly(self) -> None:
+        menu_bar = self.viz.window.nametowidget(self.viz.window.cget("menu"))
+        indicators = menu_bar.nametowidget(menu_bar.entrycget(1, "menu"))
+        index = next(i for i in range(indicators.index("end") + 1)
+                     if indicators.entrycget(i, "label") == "Bollinger")
+        self.assertEqual(indicators.type(index), "command")
+        before = set(self.viz.window.winfo_children())
+        indicators.invoke(index)
+        self.viz.window.update()
+        opened = [w for w in self.viz.window.winfo_children()
+                  if w not in before and isinstance(w, tk.Toplevel)]
+        for window in opened:
+            self.addCleanup(window.destroy)
+        self.assertEqual([w.title() for w in opened], ["Bollinger Bands"])
+
+    def test_help_button_explains_bollinger_bands_and_settings(self) -> None:
+        window = self.open_bollinger_window()
+        self.find_button(window, "Help").invoke()
+        self.viz.window.update()
+        (help_window,) = [w for w in self.descendants(window, tk.Toplevel)
+                          if w.title() == "Bollinger Bands Help"]
+        (text,) = self.descendants(help_window, tk.Text)
+        body = text.get("1.0", "end")
+        self.assertIn("middle band", body)
+        self.assertIn("Std. dev. multiplier", body)
+        help_window.destroy()
+
+    def test_period_and_multiplier_are_applied_to_the_bands(self) -> None:
+        window = self.open_bollinger_window()
+        variables = self.control_variables(window)
+        variables["enabled"].set(True)
+        self.set_entry_text(window, 0, "10")
+        self.set_entry_text(window, 1, "3")
+        self.find_button(window, "Apply").invoke()
+        self.viz.window.update()
+        self.assertEqual(self.viz.bollinger_applied["period"], 10)
+        self.assertEqual(self.viz.bollinger_applied["multiplier"], 3)
+        self.assertTrue(self.bollinger_items("upper"))
+        band_low, band_high = self.viz.indicators_object.bollinger_range(10, 3)
+        self.assertGreaterEqual(self.viz.price_upper, band_high)
+        self.assertLessEqual(self.viz.price_lower, band_low)
+        self.viz.save_labeled_selection("bands", {25})
+        record = self.viz.labeled_selections["bands"][0]
+        _, upper, lower = self.viz.indicators_object.calculate_bollinger(10, 3)
+        self.assertEqual(record["bollinger_upper"], upper[25])
+        self.assertEqual(record["bollinger_lower"], lower[25])
+
+    def test_invalid_period_is_rejected_and_nothing_changes(self) -> None:
+        before = dict(self.viz.bollinger_applied)
+        window = self.open_bollinger_window()
+        variables = self.control_variables(window)
+        variables["enabled"].set(True)
+        self.set_entry_text(window, 0, "1")
+        with mock.patch("pytradeviz.messagebox.showerror") as showerror:
+            self.find_button(window, "Apply").invoke()
+        showerror.assert_called_once()
+        self.assertEqual(self.viz.bollinger_applied, before)
+        self.assertEqual(self.bollinger_items("middle"), [])
 
 
 if __name__ == "__main__":

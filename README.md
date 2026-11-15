@@ -18,9 +18,8 @@ each timestamp must be unique. OHLC values may have a leading `$`. Ambiguous
 formats such as `MM/DD/YYYY` are not accepted. The asset ticker is the first
 value of a `symbol` column, or else a lone line above the header that is not a
 URL. The top-left corner shows that ticker and the close of the last candle
-loaded; the ticker is omitted when the file names none. The `data/data.csv`
-sample (CryptoDataDownload format) and `data/AMZN_10_year_OHLC.csv` are
-examples. Opening a file shows its oldest year of data. Use the
+loaded; the ticker is omitted when the file names none. The `data/XRP_4_year_ohlc.csv`
+sample and `data/AMZN_10_year_OHLC.csv` are examples. Opening a file shows its oldest year of data. Use the
 **+3 months →** button at the bottom right to append the next three calendar
 months; the button is disabled when all data has been loaded. Missing dates do
 not create synthetic candles.
@@ -105,8 +104,23 @@ The menu bar has four menus:
   program.
 - **Indicators**: *Moving Averages* → *Simple* opens the simple moving average
   settings, and *Moving Averages* → *Exponential* opens an empty window for now.
-  *Bollinger* → *Bollinger Bands* opens the Bollinger settings. *Support and Resistance*
-  opens the level settings described below. *RSI* is a placeholder.
+  *Bollinger* opens the Bollinger Bands window directly. *Support and Resistance*
+  opens the level settings described below. The next four items open a settings window for
+  one indicator each: *Relative Strength Index (RSI)*, *Avg. Directional Index (ADX)*,
+  *Stochastic Oscillator (STOSC)*, and *Williams %R (W%R)*.
+- **RSI/ADX/STOSC/W%R canvas**: the strip under the chart shows RSI, ADX, the stochastic
+  oscillator or Williams %R. Click the `RSI`, `ADX`, `STOSC` or `W%R` box at its top left to switch; the active box is filled. RSI is drawn
+  with its 70 (orange) and 30 (blue) lines. ADX uses Wilder's 14-candle period and is
+  drawn with a gray dashed line at 25, the level above which the market is treated as trending.
+  STOSC uses %K 14 and %D 3, with the 80 (orange) and 20 (blue) levels; %D is the dashed magenta line.
+  W%R uses a 14-candle period, with the -20 (orange) and -80 (blue) levels. It is plotted with 100 added, so 0 is at the top of the canvas and -100 at the bottom.
+  Each indicator's settings window has *Cancel*, *Apply*, and *Help* buttons. The settings are
+  the period(s) and levels listed above, and each shows its default. *Apply* validates the values,
+  shows that indicator on the canvas, and keeps the window open. *Help* explains the indicator and
+  what each setting changes. Settings are kept per timeframe tab. Changing the RSI period
+  recalculates the RSI for every candle on that tab.
+  The `Info` box at the top right of the same canvas opens a window that explains RSI, ADX,
+  the stochastic oscillator, Williams %R and how they are used together.
 - **Strategies**: a placeholder that does nothing yet.
 - **Data**: lists the labeled selections with their candle counts. *Export to JSON*
   and *Export to XML* write all selections to `data/labeled_data/selections_YYYYmmdd_HHMMSS.json`
@@ -126,8 +140,9 @@ Each candle also has four flags, written as `true`, `false`, or `null` (JSON) an
 determined yet, for example during the Bollinger warm-up or on the first candle for RSI:
 - `top_bol_intersect` / `btm_bol_intersect`: `true` when the candle's high-low range
   contains the top or bottom Bollinger band value (`low <= band <= high`).
-- `rsi_ob` / `rsi_os`: `true` when RSI moves from one side of 70 (overbought) or 30
-  (oversold) to the other on this candle, in either direction.
+- `rsi_ob` / `rsi_os`: `true` when RSI moves from one side of the overbought or oversold
+  level (70 and 30 by default, set in the RSI settings) to the other on this candle, in either
+  direction. Labels saved before a change keep the flags they were saved with.
 
 In the Simple window each moving average has its own *Show* checkbox, line
 *Style* (Dotted, Dashed, or Solid), and *Color* (Red, Blue, Orange, Green, or
@@ -140,11 +155,14 @@ Each average also has a *Show Hi-Low MA* checkbox, which is drawn only while
 *Show* is checked. It adds two averages of the same period, one of the highs
 and one of the lows, drawn as 6-pixel Xs with 1-pixel lines in the average's color.
 
-The Bollinger Bands use a fixed 20-candle window and 2 standard deviations of
-the closing prices. The middle band is the 20-candle average, and the upper and
-lower bands sit 2 standard deviations above and below it. The window has a *Show*
+The Bollinger Bands default to a 20-candle window and 2 standard deviations of
+the closing prices. Both can be changed in the Bollinger Bands window, and each
+timeframe tab keeps its own values. The middle band is the average over the period, and the upper and
+lower bands sit the multiplier's number of standard deviations above and below it. The
+window has *Period* and *Std. dev. multiplier* fields (each shows its default), a *Show*
 checkbox, a line *Style* and a *Color* chosen the same way as the averages, and
-**Apply**. The three bands are drawn as lines only, with no shading. While the
+**Close**, **Apply** and **Help** buttons. Apply checks the two numbers first, and
+nothing changes if one is invalid. The three bands are drawn as lines only, with no shading. While the
 bands are shown, the price scale grows to include them and shrinks back when they
 are hidden.
 

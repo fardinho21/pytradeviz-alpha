@@ -89,24 +89,33 @@ def window_start(end: dt.date, label: str) -> dt.date:
     return shift_months(end, months) - dt.timedelta(days=days)
 
 
-def find_pivots(highs: Sequence[float], lows: Sequence[float], bars: int) -> List[Pivot]:
-    """Swing highs and lows, each confirmed by ``bars`` candles on both sides.
+def swing_pivots(highs: Sequence[float], lows: Sequence[float], bars: int) -> Tuple[List[Pivot], List[Pivot]]:
+    """Swing highs and lows, returned separately, each in index order.
 
     A swing high is strictly above the candles before it and at least as high as
-    the candles after it (the mirror rule applies to swing lows). Pivots are
-    returned in index order.
+    the candles after it (the mirror rule applies to swing lows).
     """
-    pivots: List[Pivot] = []
+    swing_highs: List[Pivot] = []
+    swing_lows: List[Pivot] = []
     for i in range(bars, len(highs) - bars):
         before_high = highs[i - bars:i]
         after_high = highs[i + 1:i + bars + 1]
         if highs[i] > max(before_high) and highs[i] >= max(after_high):
-            pivots.append(Pivot(i, highs[i]))
+            swing_highs.append(Pivot(i, highs[i]))
         before_low = lows[i - bars:i]
         after_low = lows[i + 1:i + bars + 1]
         if lows[i] < min(before_low) and lows[i] <= min(after_low):
-            pivots.append(Pivot(i, lows[i]))
-    return pivots
+            swing_lows.append(Pivot(i, lows[i]))
+    return swing_highs, swing_lows
+
+
+def find_pivots(highs: Sequence[float], lows: Sequence[float], bars: int) -> List[Pivot]:
+    """Swing highs and lows, each confirmed by ``bars`` candles on both sides.
+
+    Pivots are returned in index order; a high comes before a low on the same candle.
+    """
+    swing_highs, swing_lows = swing_pivots(highs, lows, bars)
+    return sorted(swing_highs + swing_lows, key=lambda pivot: pivot.index)
 
 
 def cluster_prices(prices: Sequence[float], width: float) -> List[Tuple[float, int]]:

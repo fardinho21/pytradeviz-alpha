@@ -223,13 +223,12 @@ class PaginatedPriceDataTests(unittest.TestCase):
         self.assertFalse(source.has_more)
 
     def test_real_sample_is_complete_and_chronological(self) -> None:
-        path = Path(__file__).resolve().parents[1] / "data" / "data.csv"
+        path = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc.csv"
         with path.open(newline="") as file:
             reader = csv.reader(file)
             next(reader)
-            next(reader)
-            expected = [record[1][:10] for record in reader][::-1]
-        source = PaginatedPriceData(path)
+            expected = [record[0][:10] for record in reader]
+        source = PaginatedPriceData(path, skip_lines=0)
         actual = dates(source.load_initial())
         while source.has_more:
             page = source.load_next()

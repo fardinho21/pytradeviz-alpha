@@ -15,13 +15,16 @@ from candle import Candle
 import datetime as datetime
 import math
 from indicators import (
-    Indicators, SMA_PERIODS, HIGH_COLUMN, LOW_COLUMN, RSI_OVERBOUGHT, RSI_OVERSOLD,
-    band_intersects, rsi_crosses_level,
+    BOLLINGER_MULTIPLIER, BOLLINGER_PERIOD, BOLLINGER_SETTING_FIELDS, INDICATOR_SETTING_FIELDS,
+    Indicators, SMA_PERIODS, HIGH_COLUMN, LOW_COLUMN, WILLIAMS_R_CANVAS_OFFSET, band_intersects,
+    default_indicator_settings, rsi_crosses_level, validate_bollinger_settings,
+    validate_indicator_settings,
 )
 from breakout import (
     ATR_REJECTION, HORIZONS, REJECTION_RULES, BreakoutStudy, Odds,
 )
 from levels_help import LEVELS_HELP
+from indicators_help import BOLLINGER_DETAILED_HELP, INDICATOR_DETAILED_HELP, INDICATOR_HELP
 from sr_popups import SRPopup, popup_bounds
 from drawings import (
     BOX, DOTTED, FILL_STIPPLE, LINE, SEGMENT, SEGMENT_CIRCLE_RADIUS, SOLID, STYLE_DASHES,
@@ -38,6 +41,32 @@ from paginated_price_data import PaginatedPriceData
 from timeframes import DAILY, TIMEFRAMES, shows_day_labels, timeframe_rows
 
 DATA_DIRECTORY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
+# Series that the indicator canvas can show. The first is shown when a file is opened.
+INDICATOR_MODES: Tuple[str, ...] = ("RSI", "ADX", "STOSC", "W%R")
+INDICATOR_TITLES: Dict[str, str] = {
+    "RSI": "Relative Strength Index (RSI)",
+    "ADX": "Avg. Directional Index (ADX)",
+    "STOSC": "Stochastic Oscillator (STOSC)",
+    "W%R": "Williams %R (W%R)",
+}
+# Tags of everything drawn on the indicator canvas, so a redraw can clear all of it.
+INDICATOR_SERIES_TAGS: Tuple[str, ...] = ("rsi", "adx", "stoch", "willr", "indicator_level")
+
+
+def format_setting_value(value: float) -> str:
+    """Show whole numbers without a trailing .0 in the settings windows."""
+    return str(int(value)) if float(value).is_integer() else str(value)
+# Size and spacing of the RSI/ADX/STOSC/W%R toggle boxes at the top left of the indicator canvas.
+INDICATOR_TOGGLE_MARGIN = 4
+# Toggle boxes are at least this wide, and widen to fit their label.
+INDICATOR_TOGGLE_MIN_WIDTH = 40
+INDICATOR_TOGGLE_PADDING = 6
+INDICATOR_TOGGLE_HEIGHT = 18
+INDICATOR_TOGGLE_GAP = 4
+# The Info box sits at the right edge of the same row and opens the indicator help window.
+INDICATOR_INFO_LABEL = "Info"
+INDICATOR_INFO_WIDTH = 44
 
 
 def odds_text(odds: Optional[Odds]) -> str:
@@ -67,6 +96,8 @@ class ChartTabState:
     sma_applied: Dict[int, Dict[str, Any]] = dataclasses.field(default_factory=dict)
     bollinger_applied: Dict[str, Any] = dataclasses.field(default_factory=dict)
     levels_applied: Dict[str, Any] = dataclasses.field(default_factory=dict)
+    indicator_settings: Dict[str, Dict[str, Any]] = dataclasses.field(
+        default_factory=default_indicator_settings)
     zoom_level: float = 1.0
     candle_height_scale: float = 1.0
     # Left and top scroll positions as fractions of the scroll region. None means centered.
@@ -214,6 +245,12 @@ class PyTradeViz:
     _draw_selected: Optional[int] = None
     _draw_gesture: Optional[Dict[str, Any]] = None
     _toolbox: Optional[Toolbox] = None
+    # The series drawn on the indicator canvas, one of INDICATOR_MODES.
+    indicator_mode: str = "RSI"
+    # Toggle box bounds in indicator canvas coordinates, keyed by mode.
+    _indicator_toggle_boxes: Dict[str, Tuple[float, float, float, float]] = {}
+    # Info box bounds in indicator canvas coordinates, set when the overlay is drawn.
+    _indicator_info_box: Optional[Tuple[float, float, float, float]] = None
     # Labels map to candle records, in the order the selections were saved.
     labeled_selections: Selections
     export_directory: str = EXPORT_DIRECTORY
@@ -247,9 +284,11 @@ class PyTradeViz:
         self.selected_indices = set()
         self.labeled_selections = {}
         self.data_source = data_source
+        # Parameters for each indicator; each timeframe tab keeps its own copy.
+        self.indicator_settings: Dict[str, Dict[str, Any]] = default_indicator_settings()
         self.indicators_object = Indicators()
         self.indicators_object.set_price_data(self.price_data)
-        self.indicators_object.calculate_RSI_incremental()
+        self.indicators_object.calculate_RSI_incremental(self.indicator_settings["RSI"]["period"])
         # Applied simple moving average settings, keyed by period.
         self.sma_applied: Dict[int, Dict[str, Any]] = {
             period: {"enabled": False, "hi_lo": False, "style": "Solid",
@@ -257,8 +296,11 @@ class PyTradeViz:
             for period in SMA_PERIODS
         }
         self._sma_items: List[int] = []
-        # Bollinger Bands settings. The period and width are fixed in the indicator module.
-        self.bollinger_applied: Dict[str, Any] = {"enabled": False, "style": "Solid", "color": "Green"}
+        # Bollinger Bands settings. The period and multiplier are kept per tab, like the indicator settings.
+        self.bollinger_applied: Dict[str, Any] = {
+            "enabled": False, "style": "Solid", "color": "Green",
+            "period": BOLLINGER_PERIOD, "multiplier": BOLLINGER_MULTIPLIER,
+        }
         self._bollinger_items: List[int] = []
         # Support and resistance settings. Each window label has its own display settings.
         self.levels_applied: Dict[str, Any] = {
@@ -404,6 +446,7 @@ class PyTradeViz:
             sma_applied=copy.deepcopy(self.sma_applied),
             bollinger_applied=copy.deepcopy(self.bollinger_applied),
             levels_applied=copy.deepcopy(self.levels_applied),
+            indicator_settings=copy.deepcopy(self.indicator_settings),
         )
 
     def capture_tab_state(self) -> ChartTabState:
@@ -413,6 +456,7 @@ class PyTradeViz:
             sma_applied=self.sma_applied,
             bollinger_applied=self.bollinger_applied,
             levels_applied=self.levels_applied,
+            indicator_settings=self.indicator_settings,
             zoom_level=self.zoom_level,
             candle_height_scale=self.candle_height_scale,
             xview=self.canvas.xview()[0],
@@ -429,6 +473,7 @@ class PyTradeViz:
         self.sma_applied = state.sma_applied
         self.bollinger_applied = state.bollinger_applied
         self.levels_applied = state.levels_applied
+        self.indicator_settings = state.indicator_settings
 
     def select_timeframe(self, label: str) -> None:
         if label == self.active_timeframe or label not in TIMEFRAMES or not self._daily_rows:
@@ -461,7 +506,7 @@ class PyTradeViz:
         self.price_data_object = {"price_data": rows}
         self.price_data = rows
         self.indicators_object.set_price_data(rows)
-        self.indicators_object.calculate_RSI_incremental()
+        self.indicators_object.calculate_RSI_full(self.indicator_settings["RSI"]["period"])
 
         # Build at base size as startup does, then fit the chart to the current window.
         self.zoom_level = 1.0
@@ -728,15 +773,16 @@ class PyTradeViz:
         }
         for period, field in MOVING_AVERAGE_FIELDS.items():
             record[field] = self.indicators_object.calculate_SMA(period)[index]
-        middle, upper, lower = self.indicators_object.calculate_bollinger()
+        middle, upper, lower = self.indicators_object.calculate_bollinger(*self.bollinger_parameters())
         record["bollinger_middle"] = middle[index]
         record["bollinger_upper"] = upper[index]
         record["bollinger_lower"] = lower[index]
         previous_rsi = self.price_data[index - 1][5]["rsi"] if index > 0 else None
         record["top_bol_intersect"] = band_intersects(low, high, upper[index])
         record["btm_bol_intersect"] = band_intersects(low, high, lower[index])
-        record["rsi_os"] = rsi_crosses_level(previous_rsi, record["rsi"], RSI_OVERSOLD)
-        record["rsi_ob"] = rsi_crosses_level(previous_rsi, record["rsi"], RSI_OVERBOUGHT)
+        rsi_settings = self.indicator_settings["RSI"]
+        record["rsi_os"] = rsi_crosses_level(previous_rsi, record["rsi"], rsi_settings["oversold"])
+        record["rsi_ob"] = rsi_crosses_level(previous_rsi, record["rsi"], rsi_settings["overbought"])
         return record
 
     def initialize_indicators_menu(self, tk: ModuleType) -> Any:
@@ -747,12 +793,14 @@ class PyTradeViz:
                 label=name, command=lambda name=name: self.open_moving_average_window(tk, name),
             )
         indicators_menu.add_cascade(label="Moving Averages", menu=moving_averages_menu)
-        indicators_menu.add_cascade(label="RSI", menu=tk.Menu(indicators_menu, tearoff=0))
-        bollinger_menu = tk.Menu(indicators_menu, tearoff=0)
-        bollinger_menu.add_command(
-            label="Bollinger Bands", command=lambda: self.open_bollinger_window(tk),
+        for mode in INDICATOR_MODES:
+            indicators_menu.add_command(
+                label=INDICATOR_TITLES[mode],
+                command=lambda mode=mode: self.open_indicator_settings_window(tk, mode),
+            )
+        indicators_menu.add_command(
+            label="Bollinger", command=lambda: self.open_bollinger_window(tk),
         )
-        indicators_menu.add_cascade(label="Bollinger", menu=bollinger_menu)
         indicators_menu.add_command(
             label="Support and Resistance", command=lambda: self.open_levels_window(tk),
         )
@@ -767,26 +815,39 @@ class PyTradeViz:
         window = self.open_modal_window(tk, "Bollinger Bands")
         self.build_bollinger_content(tk, window)
 
+    def bollinger_parameters(self) -> Tuple[int, float]:
+        return self.bollinger_applied["period"], self.bollinger_applied["multiplier"]
+
     def build_bollinger_content(self, tk: ModuleType, window: Any) -> None:
         # Edits are staged in these variables and only applied by the Apply button.
         applied = self.bollinger_applied
-        staged = {
+        staged: Dict[str, Any] = {
             "enabled": tk.BooleanVar(window, value=applied["enabled"]),
             "style": tk.StringVar(window, value=applied["style"]),
             "color": tk.StringVar(window, value=applied["color"]),
         }
-        group = tk.LabelFrame(window, text="Bollinger Bands (20 candles, 2 std. dev.)",
-                              padx=10, pady=6)
-        group.pack(fill="x", padx=12, pady=(12, 0))
-        tk.Checkbutton(group, text="Show", variable=staged["enabled"]).grid(
+        bands = tk.LabelFrame(window, text="Bands", padx=10, pady=6)
+        bands.pack(fill="x", padx=12, pady=(12, 0))
+        defaults = {"period": BOLLINGER_PERIOD, "multiplier": BOLLINGER_MULTIPLIER}
+        for row, (key, label, _kind, _low, _high) in enumerate(BOLLINGER_SETTING_FIELDS):
+            staged[key] = tk.StringVar(window, value=format_setting_value(applied[key]))
+            tk.Label(bands, text=label).grid(row=row, column=0, sticky="w", pady=2)
+            tk.Entry(bands, textvariable=staged[key], width=10).grid(
+                row=row, column=1, sticky="w", padx=(12, 12), pady=2)
+            tk.Label(bands, text=f"Default: {format_setting_value(defaults[key])}", fg="gray").grid(
+                row=row, column=2, sticky="w", pady=2)
+
+        display = tk.LabelFrame(window, text="Display", padx=10, pady=6)
+        display.pack(fill="x", padx=12, pady=(12, 0))
+        tk.Checkbutton(display, text="Show", variable=staged["enabled"]).grid(
             row=0, column=0, sticky="w")
-        tk.Label(group, text="Style:").grid(row=1, column=0, sticky="w")
+        tk.Label(display, text="Style:").grid(row=1, column=0, sticky="w")
         for column, style in enumerate(self.sma_line_styles, start=1):
-            tk.Radiobutton(group, text=style, value=style, variable=staged["style"]).grid(
+            tk.Radiobutton(display, text=style, value=style, variable=staged["style"]).grid(
                 row=1, column=column, sticky="w")
-        tk.Label(group, text="Color:").grid(row=2, column=0, sticky="w")
+        tk.Label(display, text="Color:").grid(row=2, column=0, sticky="w")
         for column, color in enumerate(self.sma_colors, start=1):
-            tk.Radiobutton(group, text=color, value=color, variable=staged["color"]).grid(
+            tk.Radiobutton(display, text=color, value=color, variable=staged["color"]).grid(
                 row=2, column=column, sticky="w")
 
         buttons = tk.Frame(window)
@@ -794,19 +855,82 @@ class PyTradeViz:
         tk.Button(buttons, text="Close", width=8, command=window.destroy).pack(side="right")
         tk.Button(
             buttons, text="Apply", width=8,
-            command=lambda: self.apply_bollinger(staged),
+            command=lambda: self.apply_bollinger(window, staged),
         ).pack(side="right", padx=(0, 8))
+        tk.Button(
+            buttons, text="Help", width=8,
+            command=lambda: self.show_help_window(
+                tk, "Bollinger Bands Help", BOLLINGER_DETAILED_HELP, window),
+        ).pack(side="left")
 
-    def apply_bollinger(self, staged: Dict[str, Any]) -> None:
+    def apply_bollinger(self, window: Any, staged: Dict[str, Any]) -> None:
+        # Nothing changes unless the period and multiplier are valid, so Show and the style stay as they were.
+        try:
+            values = validate_bollinger_settings({key: staged[key].get() for key in ("period", "multiplier")})
+        except ValueError as error:
+            messagebox.showerror("Invalid setting", str(error), parent=window)
+            return
         self.bollinger_applied = {
             "enabled": staged["enabled"].get(),
             "style": staged["style"].get(),
             "color": staged["color"].get(),
+            **values,
         }
         # Showing the bands can widen the price scale, so the chart is rescaled to fit.
         old_upper, old_lower = self.price_upper, self.price_lower
         self.calculate_price_range()
         self.rescale_price_scale(old_upper, old_lower)
+        self.draw_overlays()
+
+    def open_indicator_settings_window(self, tk: ModuleType, mode: str) -> None:
+        window = self.open_modal_window(tk, INDICATOR_TITLES[mode])
+        self.build_indicator_settings_content(tk, window, mode)
+
+    def build_indicator_settings_content(self, tk: ModuleType, window: Any, mode: str) -> None:
+        # Entries are staged as text and only applied by the Apply button, which validates them first.
+        applied = self.indicator_settings[mode]
+        defaults = default_indicator_settings()[mode]
+        staged: Dict[str, Any] = {}
+        group = tk.LabelFrame(window, text=f"{INDICATOR_TITLES[mode]} settings", padx=10, pady=6)
+        group.pack(fill="x", padx=12, pady=(12, 0))
+        for row, (key, label, _kind, _low, _high) in enumerate(INDICATOR_SETTING_FIELDS[mode]):
+            staged[key] = tk.StringVar(window, value=format_setting_value(applied[key]))
+            tk.Label(group, text=label).grid(row=row, column=0, sticky="w", pady=2)
+            tk.Entry(group, textvariable=staged[key], width=10).grid(
+                row=row, column=1, sticky="w", padx=(12, 12), pady=2)
+            tk.Label(group, text=f"Default: {format_setting_value(defaults[key])}", fg="gray").grid(
+                row=row, column=2, sticky="w", pady=2)
+
+        buttons = tk.Frame(window)
+        buttons.pack(fill="x", padx=12, pady=12)
+        tk.Button(buttons, text="Cancel", width=8, command=window.destroy).pack(side="left")
+        tk.Button(
+            buttons, text="Apply", width=8,
+            command=lambda: self.apply_indicator_settings_from_window(window, mode, staged),
+        ).pack(side="left", padx=(8, 0))
+        tk.Button(
+            buttons, text="Help", width=8,
+            command=lambda: self.show_help_window(
+                tk, f"{INDICATOR_TITLES[mode]} Help", INDICATOR_DETAILED_HELP[mode], window),
+        ).pack(side="left", padx=(8, 0))
+
+    def apply_indicator_settings_from_window(self, window: Any, mode: str, staged: Dict[str, Any]) -> None:
+        try:
+            values = validate_indicator_settings(mode, {key: var.get() for key, var in staged.items()})
+        except ValueError as error:
+            messagebox.showerror("Invalid setting", str(error), parent=window)
+            return
+        self.apply_indicator_settings(mode, values)
+
+    def apply_indicator_settings(self, mode: str, values: Dict[str, Any]) -> None:
+        previous = self.indicator_settings[mode]
+        self.indicator_settings[mode] = values
+        # RSI is stored on each candle, so a new period means recomputing every candle.
+        if mode == "RSI" and values["period"] != previous["period"] and self.indicators_object.price_data:
+            self.indicators_object.calculate_RSI_full(values["period"])
+        # Applying a setting shows its indicator on the canvas.
+        self.indicator_mode = mode
+        self.redraw_indicator_canvas()
         self.draw_overlays()
 
     def open_levels_window(self, tk: ModuleType) -> None:
@@ -1025,7 +1149,16 @@ class PyTradeViz:
         self.draw_overlays()
 
     def open_levels_help(self, tk: ModuleType, parent: Any) -> None:
-        help_window = self.open_modal_window(tk, "Support and Resistance Help", parent=parent)
+        self.show_help_window(tk, "Support and Resistance Help", LEVELS_HELP, parent)
+
+    def open_indicator_help(self, tk: ModuleType, parent: Any) -> None:
+        self.show_help_window(tk, "Indicator Help", INDICATOR_HELP, parent)
+
+    def show_help_window(
+        self, tk: ModuleType, title: str,
+        sections: Tuple[Tuple[str, Tuple[str, ...]], ...], parent: Any,
+    ) -> None:
+        help_window = self.open_modal_window(tk, title, parent=parent)
         body = tk.Frame(help_window)
         body.pack(fill="both", expand=True, padx=12, pady=(12, 0))
         text = tk.Text(body, wrap="word", width=84, height=30, padx=8, pady=6,
@@ -1037,7 +1170,7 @@ class PyTradeViz:
         heading_font = (tkfont.nametofont("TkDefaultFont").cget("family"), 11, "bold")
         text.tag_configure("heading", font=heading_font, spacing1=10, spacing3=2)
         text.tag_configure("body", spacing3=6)
-        for heading, paragraphs in LEVELS_HELP:
+        for heading, paragraphs in sections:
             text.insert("end", heading + "\n", "heading")
             for paragraph in paragraphs:
                 text.insert("end", paragraph + "\n", "body")
@@ -1095,14 +1228,7 @@ class PyTradeViz:
                 )
             price_level-=self.incrementer
 
-        self.canvas_indicators.create_line(
-            0, RSI_OVERBOUGHT, self.chart_grid_space_x, RSI_OVERBOUGHT, fill="orange", width=2,
-            tags=("indicator_level",)
-        )
-        self.canvas_indicators.create_line(
-            0, RSI_OVERSOLD, self.chart_grid_space_x, RSI_OVERSOLD, fill="blue", width=2,
-            tags=("indicator_level",)
-        )
+        self.draw_indicator_levels()
         
     def initialize_canvases(self, tk: ModuleType) -> None:
         self.canvas= tk.Canvas(self.frame_canvas, width=self.canvas_width, height=self.canvas_height)
@@ -1201,11 +1327,138 @@ class PyTradeViz:
             c.draw_candle(self.canvas, hollow=self.dark_mode)
 
     def render_indicators(self, start: int = 0, tags: Tuple[str, ...] = ()) -> None:
+        ink = self.get_theme()["ink"]
+        settings = self.indicator_settings
+        if self.indicator_mode == "ADX":
+            self.indicators_object.render_ADX(
+                self.canvas_indicators, self.chart_grid_divider_v, self.chart_padding_x,
+                start=start, tags=("adx", "ink") + tags, fill=ink,
+                period=settings["ADX"]["period"],
+            )
+            return
+        if self.indicator_mode == "STOSC":
+            self.indicators_object.render_STOCH(
+                self.canvas_indicators, self.chart_grid_divider_v, self.chart_padding_x,
+                start=start, tags=("stoch", "ink") + tags, fill=ink,
+                k_period=settings["STOSC"]["k_period"], d_period=settings["STOSC"]["d_period"],
+            )
+            return
+        if self.indicator_mode == "W%R":
+            self.indicators_object.render_WILLR(
+                self.canvas_indicators, self.chart_grid_divider_v, self.chart_padding_x,
+                start=start, tags=("willr", "ink") + tags, fill=ink,
+                period=settings["W%R"]["period"],
+            )
+            return
         self.indicators_object.render_RSI(
             self.canvas_indicators, self.chart_grid_divider_v, self.chart_padding_x,
-            start=start, tags=("rsi", "ink") + tags, fill=self.get_theme()["ink"]
+            start=start, tags=("rsi", "ink") + tags, fill=ink
         )
-        pass
+
+    def draw_indicator_levels(self) -> None:
+        """Draw the reference lines for the active series on the indicator canvas."""
+        canvas = self.canvas_indicators
+        canvas.delete("indicator_level")
+        width = self.chart_grid_space_x
+        settings = self.indicator_settings[self.indicator_mode]
+        # Values are plotted as 100 - value, so a level sits at 100 - level on the canvas.
+        # Williams %R is shifted by WILLIAMS_R_CANVAS_OFFSET before plotting, so its levels are too.
+        if self.indicator_mode == "ADX":
+            y = 100 - settings["trend_level"]
+            canvas.create_line(0, y, width, y, fill="gray", width=2, dash=(4, 4),
+                               tags=("indicator_level",))
+            return
+        offset = WILLIAMS_R_CANVAS_OFFSET if self.indicator_mode == "W%R" else 0
+        overbought, oversold = settings["overbought"], settings["oversold"]
+        y_overbought = 100 - (overbought + offset)
+        y_oversold = 100 - (oversold + offset)
+        canvas.create_line(0, y_overbought, width, y_overbought, fill="orange",
+                           width=2, tags=("indicator_level",))
+        canvas.create_line(0, y_oversold, width, y_oversold, fill="blue",
+                           width=2, tags=("indicator_level",))
+
+    def redraw_indicator_canvas(self) -> None:
+        for tag in INDICATOR_SERIES_TAGS:
+            self.canvas_indicators.delete(tag)
+        if self.indicators_object.price_data:
+            self.render_indicators()
+        self.draw_indicator_levels()
+
+    def select_indicator_mode(self, mode: str) -> None:
+        if mode == self.indicator_mode:
+            return
+        self.indicator_mode = mode
+        self.redraw_indicator_canvas()
+        self.draw_overlays()
+
+    def indicator_toggle_at(self, event: tk.Event) -> Optional[str]:
+        x = self.canvas_indicators.canvasx(event.x)
+        for mode, (x1, y1, x2, y2) in self._indicator_toggle_boxes.items():
+            if x1 <= x <= x2 and y1 <= event.y <= y2:
+                return mode
+        return None
+
+    def on_indicators_press(self, event: tk.Event) -> None:
+        # Start the scroll gesture first so a drag that begins on a button still scrolls cleanly.
+        self.scroll_start(event)
+        if self.indicator_info_at(event):
+            self.open_indicator_help(tk, self.window)
+            return
+        mode = self.indicator_toggle_at(event)
+        if mode is not None:
+            self.select_indicator_mode(mode)
+
+    def indicator_info_at(self, event: tk.Event) -> bool:
+        if self._indicator_info_box is None:
+            return False
+        x1, y1, x2, y2 = self._indicator_info_box
+        x = self.canvas_indicators.canvasx(event.x)
+        return x1 <= x <= x2 and y1 <= event.y <= y2
+
+    def draw_indicator_info_button(self) -> None:
+        canvas = self.canvas_indicators
+        canvas.delete("indicator_info")
+        theme = self.get_theme()
+        # The right edge of the visible part of the canvas, so the box stays pinned while scrolling.
+        visible_width = canvas.winfo_width() or self.canvas_width
+        x2 = canvas.canvasx(visible_width) - INDICATOR_TOGGLE_MARGIN
+        x1 = x2 - INDICATOR_INFO_WIDTH
+        top = INDICATOR_TOGGLE_MARGIN
+        y2 = top + INDICATOR_TOGGLE_HEIGHT
+        self._indicator_info_box = (x1, top, x2, y2)
+        canvas.create_rectangle(
+            x1, top, x2, y2, fill=theme["canvas"], outline=theme["ink"],
+            tags=("indicator_info",)
+        )
+        canvas.create_text(
+            (x1 + x2) / 2, (top + y2) / 2, text=INDICATOR_INFO_LABEL,
+            fill=theme["ink"], tags=("indicator_info",)
+        )
+
+    def draw_indicator_toggles(self) -> None:
+        canvas = self.canvas_indicators
+        canvas.delete("indicator_toggle")
+        theme = self.get_theme()
+        left = canvas.canvasx(0) + INDICATOR_TOGGLE_MARGIN
+        top = INDICATOR_TOGGLE_MARGIN
+        self._indicator_toggle_boxes = {}
+        font = tkfont.Font(root=self.window, name="TkDefaultFont", exists=True)
+        x1 = left
+        for mode in INDICATOR_MODES:
+            width = max(INDICATOR_TOGGLE_MIN_WIDTH, font.measure(mode) + 2 * INDICATOR_TOGGLE_PADDING)
+            x2 = x1 + width
+            y2 = top + INDICATOR_TOGGLE_HEIGHT
+            self._indicator_toggle_boxes[mode] = (x1, top, x2, y2)
+            active = mode == self.indicator_mode
+            canvas.create_rectangle(
+                x1, top, x2, y2, fill=theme["ink"] if active else theme["canvas"],
+                outline=theme["ink"], tags=("indicator_toggle",)
+            )
+            canvas.create_text(
+                (x1 + x2) / 2, (top + y2) / 2, text=mode,
+                fill=theme["canvas"] if active else theme["ink"], tags=("indicator_toggle",)
+            )
+            x1 = x2 + INDICATOR_TOGGLE_GAP
 
     def calculate_grid_space_x(self, price_data_object: Dict[str, Any]) -> None:
         num_of_candles = len(price_data_object["price_data"])
@@ -1232,7 +1485,7 @@ class PyTradeViz:
         # The scale also covers the Bollinger Bands while they are shown.
         scale_lowest, scale_highest = lowest, highest
         if self.bollinger_applied["enabled"]:
-            band_range = self.indicators_object.bollinger_range()
+            band_range = self.indicators_object.bollinger_range(*self.bollinger_parameters())
             if band_range is not None:
                 scale_lowest = min(scale_lowest, band_range[0])
                 scale_highest = max(scale_highest, band_range[1])
@@ -1534,7 +1787,7 @@ class PyTradeViz:
 
         self._daily_rows.extend(new_rows)
         self.update_ticker_label()
-        self.indicators_object.calculate_RSI_incremental()
+        self.indicators_object.calculate_RSI_incremental(self.indicator_settings["RSI"]["period"])
         self.calculate_price_range(new_rows)
         self.price_upper = max(old_upper, self.price_upper)
         ratio, shift = self.rescale_price_scale(old_upper, old_lower)
@@ -2010,7 +2263,8 @@ class PyTradeViz:
         settings = self.bollinger_applied
         if not settings["enabled"]:
             return
-        series = zip(("middle", "upper", "lower"), self.indicators_object.calculate_bollinger())
+        series = zip(("middle", "upper", "lower"),
+                     self.indicators_object.calculate_bollinger(*self.bollinger_parameters()))
         for name, values in series:
             self._bollinger_items.extend(self.indicators_object.render_series(
                 self.canvas, values,
@@ -2179,6 +2433,8 @@ class PyTradeViz:
         self.draw_support_resistance()
         self.draw_drawings()
         self.draw_toolbox()
+        self.draw_indicator_toggles()
+        self.draw_indicator_info_button()
         self.draw_crosshair()
 
     def refresh_drawing_layer(self) -> None:
@@ -2639,7 +2895,7 @@ class PyTradeViz:
         self.canvas_date.bind("<Control-MouseWheel>", self.zoom_chart)
         self.canvas_date.bind("<Control-Button-4>", self.zoom_chart)
         self.canvas_date.bind("<Control-Button-5>", self.zoom_chart)
-        self.canvas_indicators.bind("<ButtonPress-1>", self.scroll_start)
+        self.canvas_indicators.bind("<ButtonPress-1>", self.on_indicators_press)
         self.canvas_indicators.bind("<B1-Motion>", self.scroll_move)
         self.canvas_indicators.bind("<Control-MouseWheel>", self.zoom_chart)
         self.canvas_indicators.bind("<Control-Button-4>", self.zoom_chart)

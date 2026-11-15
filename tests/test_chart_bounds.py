@@ -72,12 +72,11 @@ class ChartBoundsTests(unittest.TestCase):
 )
 class TkChartBoundsTests(unittest.TestCase):
     def setUp(self) -> None:
-        path = Path(__file__).resolve().parents[1] / "data" / "data.csv"
+        path = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc.csv"
         with path.open(newline="") as file:
-            rows = list(csv.reader(file))[2:]
-        rows.reverse()
+            rows = list(csv.reader(file))[1:]
         self.price_data = [
-            [row[1].split(" ")[0].split("-"), *(float(v) for v in row[3:7]),
+            [row[0].split("-"), *(float(v) for v in row[1:5]),
              {"rsi": None}]
             for row in rows
         ]
@@ -90,7 +89,7 @@ class TkChartBoundsTests(unittest.TestCase):
         canvas = self.viz.canvas
         rectangles = [
             item for item in canvas.find_all()
-            if canvas.type(item) == "rectangle"
+            if canvas.type(item) == "rectangle" and "candle" in canvas.gettags(item)
         ]
         self.assertEqual(len(rectangles), len(self.price_data))
         for item in rectangles:

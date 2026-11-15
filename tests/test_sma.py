@@ -258,7 +258,7 @@ class SimpleMovingAverageWindowTests(unittest.TestCase):
         self.assertEqual(len(self.sma_items(3)), 1)
 
     def test_lines_extend_after_loading_more_data(self) -> None:
-        path = Path(__file__).resolve().parents[1] / "data" / "data.csv"
+        path = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc.csv"
         source = PaginatedPriceData(path)
         with contextlib.redirect_stdout(io.StringIO()):
             viz = PyTradeViz(tk, ttk, {"price_data": source.load_initial()}, data_source=source)

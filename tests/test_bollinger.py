@@ -4,7 +4,9 @@ import math
 import unittest
 from typing import Any, List
 
-from indicators import BOLLINGER_MULTIPLIER, BOLLINGER_PERIOD, Indicators
+from indicators import (
+    BOLLINGER_MULTIPLIER, BOLLINGER_PERIOD, Indicators, validate_bollinger_settings,
+)
 
 
 def make_rows(closes: List[float]) -> List[List[Any]]:
@@ -15,7 +17,7 @@ def make_rows(closes: List[float]) -> List[List[Any]]:
 
 
 class BollingerCalculationTests(unittest.TestCase):
-    def test_fixed_settings(self) -> None:
+    def test_default_settings(self) -> None:
         self.assertEqual(BOLLINGER_PERIOD, 20)
         self.assertEqual(BOLLINGER_MULTIPLIER, 2)
 
@@ -71,6 +73,29 @@ class BollingerCalculationTests(unittest.TestCase):
     def test_range_is_none_without_a_full_window(self) -> None:
         indicators = Indicators(price_data=make_rows([1, 2]))
         self.assertIsNone(indicators.bollinger_range(period=3, multiplier=2))
+
+
+class BollingerSettingsValidationTests(unittest.TestCase):
+    def test_accepts_whole_period_and_multiplier(self) -> None:
+        self.assertEqual(
+            validate_bollinger_settings({"period": " 20 ", "multiplier": "2"}),
+            {"period": 20, "multiplier": 2.0},
+        )
+
+    def test_rejects_bad_values(self) -> None:
+        bad = [
+            {"period": "1", "multiplier": "2"},
+            {"period": "2.5", "multiplier": "2"},
+            {"period": "", "multiplier": "2"},
+            {"period": "20", "multiplier": "0.05"},
+            {"period": "20", "multiplier": "11"},
+            {"period": "20", "multiplier": "nan"},
+            {"period": "20", "multiplier": "inf"},
+            {"period": "20", "multiplier": "abc"},
+        ]
+        for raw in bad:
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                validate_bollinger_settings(raw)
 
 
 if __name__ == "__main__":

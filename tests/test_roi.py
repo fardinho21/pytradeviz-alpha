@@ -17,12 +17,11 @@ from pytradeviz import PyTradeViz
 
 
 def load_price_rows() -> List[List[Any]]:
-    path = Path(__file__).resolve().parents[1] / "data" / "data.csv"
+    path = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc.csv"
     with path.open(newline="") as file:
-        rows = list(csv.reader(file))[2:]
-    rows.reverse()
+        rows = list(csv.reader(file))[1:]
     return [
-        [row[1].split(" ")[0].split("-"), *(float(v) for v in row[3:7]), {"rsi": None}]
+        [row[0].split("-"), *(float(v) for v in row[1:5]), {"rsi": None}]
         for row in rows
     ]
 

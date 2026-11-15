@@ -8,7 +8,7 @@ import tkinter as tk
 import unittest
 from tkinter import ttk
 from types import SimpleNamespace
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from indicators import SMA_PERIODS
 from levels import LevelSettings
@@ -32,6 +32,12 @@ class CanvasStub:
 
     def delete(self, *tags: str) -> None:
         pass
+
+    def create_rectangle(self, *args: Any, **options: Any) -> int:
+        return 0
+
+    def create_text(self, *args: Any, **options: Any) -> int:
+        return 0
 
     def find_withtag(self, tag: str) -> Tuple[()]:
         return ()
@@ -95,6 +101,9 @@ class ZoomTests(unittest.TestCase):
         self.viz.levels_applied = {"mode": "Causal", "settings": LevelSettings(), "windows": {}}
         self.viz._levels_items = []
         self.viz._levels_cache = None
+        # Toggle and Info boxes need a real Tk window; zoom tests only check scrolling.
+        self.viz.draw_indicator_toggles = lambda: None
+        self.viz.draw_indicator_info_button = lambda: None
 
     def zoom(
         self, delta: int, widget: Optional[object] = None,

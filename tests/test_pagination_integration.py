@@ -27,12 +27,12 @@ def add_months(date: datetime.date, months: int) -> datetime.date:
 )
 class PaginationIntegrationTests(unittest.TestCase):
     def test_sample_file_initial_year_and_three_month_pages(self) -> None:
-        path = Path(__file__).resolve().parents[1] / "data" / "data.csv"
+        path = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc.csv"
         with path.open(newline="") as file:
             dates = [
-                datetime.date.fromisoformat(row[1].split()[0])
-                for row in list(csv.reader(file))[2:]
-            ][::-1]
+                datetime.date.fromisoformat(row[0])
+                for row in list(csv.reader(file))[1:]
+            ]
         source = PaginatedPriceData(path)
         initial = source.load_initial()
         start = dates[0]
