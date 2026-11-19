@@ -81,18 +81,31 @@ class ToolbarLayoutTests(unittest.TestCase):
         ])
         moving_averages = indicators.nametowidget(indicators.entrycget(0, "menu"))
         self.assertEqual(self.menu_labels(moving_averages), ["Exponential", "Simple"])
+        self.assertEqual(self.menu_labels(self.strategies_menu()), ["Positional", "Indicator Based"])
 
     def file_menu(self) -> tk.Menu:
         menu_bar = self.viz.window.nametowidget(self.viz.window.cget("menu"))
         return menu_bar.nametowidget(menu_bar.entrycget(0, "menu"))
 
-    def test_strategies_item_does_nothing(self) -> None:
+    def strategies_menu(self) -> tk.Menu:
         menu_bar = self.viz.window.nametowidget(self.viz.window.cget("menu"))
+        return menu_bar.nametowidget(menu_bar.entrycget(2, "menu"))
+
+    def test_positional_item_opens_modal_window(self) -> None:
         before = set(self.viz.window.winfo_children())
-        menu_bar.invoke(2)
+        self.strategies_menu().invoke(0)
         self.viz.window.update()
-        self.assertTrue(self.viz.window.winfo_exists())
+        opened = [w for w in self.viz.window.winfo_children()
+                  if isinstance(w, tk.Toplevel) and w not in before]
+        self.assertEqual([w.title() for w in opened], ["Positional Strategy"])
+        self.assertTrue(opened[0].winfo_children(), "Positional window should show its controls")
+
+    def test_indicator_based_item_does_nothing(self) -> None:
+        before = set(self.viz.window.winfo_children())
+        self.strategies_menu().invoke(1)
+        self.viz.window.update()
         self.assertEqual(set(self.viz.window.winfo_children()), before)
+        self.assertIsNone(self.viz.window.grab_current())
 
     def test_file_menu_items(self) -> None:
         self.assertEqual(

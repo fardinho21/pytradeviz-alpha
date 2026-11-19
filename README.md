@@ -34,7 +34,13 @@ their position even when they are outside the window. All data stays in memory, 
 the window only affects drawing, not loading. The vertical price scale still uses all loaded data.
 
 Drag the chart to pan, use the scrollbars, or hold Ctrl and use the mouse wheel
-to zoom. Click a candle to show its date and open, high, low, and close values
+to zoom. While you drag the chart or one of its axes, the pointer is a closed fist.
+Over anything you can click it is a pointing hand: the buttons around the chart, the
+menu bar and its menus, the toolbox buttons in draw mode (not the inert fill buttons),
+the RSI/ADX/STOSC/W%R and Info boxes, the TREND box, the support/resistance popups,
+and the buttons in the settings windows. The fist is the bitmap in `cursors/`, which
+Tk loads on X11; where Tk has no closed hand it falls back to the four-way move arrow.
+Click a candle to show its date and open, high, low, and close values
 in the top-right corner of the chart. Hold Shift and use the mouse wheel over
 the chart or its axes to adjust candle height and the price scale independently
 from 1.0× to 2.5×. The ☾/☀ button in the bottom-right corner, above the load button, toggles
@@ -102,7 +108,11 @@ The last row has Undo,
 Delete (removes the selected drawing), and Clear (removes all drawings). Drag on the chart
 with a feature selected to draw. Click a drawing to select it, then drag it to move it. While
 a drawing is being drawn or moved, the toolbox fades to a stipple pattern so the candles behind
-it stay visible. It returns to solid on release. Hovering over a drawing shows a move cursor. Drawings can only be moved in draw mode, and they stay
+it stay visible. It returns to solid on release. To move the toolbox, press on an empty part
+of it (not on a button) and drag. It fades the same way while it moves, and the pointer shows
+the move cursor over a spot you can drag it by. The toolbox is kept inside the chart, stays
+fixed on screen while you scroll or zoom, and keeps its place when you leave and re-enter draw
+mode, switch tabs, or open another file, until the program exits. Hovering over a drawing shows a move cursor. Drawings can only be moved in draw mode, and they stay
 fixed when you press Escape, which leaves the mode. Drawings are stored in candle and price
 units, so they stay in place when you zoom, scroll, or resize. Opening a new data file clears
 them. Drawings, including Fib retracements, are stored per tab. A retracement appears only on
@@ -143,7 +153,34 @@ The menu bar has five items:
   recalculates the RSI for every candle on that tab.
   The `Info` box at the top right of the same canvas opens a window that explains RSI, ADX,
   the stochastic oscillator, Williams %R and how they are used together.
-- **Strategies**: a placeholder that does nothing yet.
+- **Strategies**: a drop-down with *Positional* and *Indicator Based*. *Indicator Based* does
+  nothing yet. *Positional* opens the Positional Strategy window, which backtests one order on
+  the loaded candles. Two rows describe the order: *Entry price*, *ROI (%)* and *Target price*,
+  then *Stop loss (%)* and *Stop price* under the last two. The entry price, ROI and stop loss
+  take numbers only: digits with at most one decimal point, and the ROI may start with `+` or
+  `-`. Anything else is refused as it is typed or pasted. *Target price* and *Stop price*
+  cannot be edited. They show the entry price with the ROI added and with the stop loss taken
+  off, so an entry price of 100 gives a target of 105 with an ROI of 5 and a stop of 98 with a
+  stop loss of 2. Each is empty until both of its boxes hold a number. *Cancel* closes the
+  window and tests nothing.
+  *Test* walks the daily candles from the first to the last, one candle at a time. It buys on
+  the first candle whose low-to-high range holds the entry price. From the next candle on it
+  sells at the target price once a high reaches it, or at the stop price once a low reaches
+  it, and then looks for the next buy from the candle after the sale. A candle that reaches
+  both is taken to hit the stop first, unless it opens at or above the target. Sales are
+  always at the target or the stop price, so a candle that gaps past one is not sold at its
+  open. *Test* needs an entry price and an ROI above 0 and a stop loss above 0 and below 100,
+  and names the box to correct otherwise. Only the candles loaded so far are tested, so load
+  the rest with **>** or **>>>** first to test a whole file.
+  The results open in a second window: a line with the number of trades and the dates tested,
+  and a list of every trade with its *Entry date*, *Entry price*, *Sell date* and *Sell price*.
+  A position still held on the last candle is listed as *Still open*. The candles that the
+  trades were bought and sold on are highlighted on the chart. On a tab other than Daily the
+  daily candles are still the ones tested, and the candle that holds each of those days is
+  highlighted. Select a trade in the list to scroll the chart to it, beside the two windows.
+  The first trade is selected when the list opens. Testing drops any candle selection or ROI
+  measurement on the chart. Closing the results, with *Close* or from the title bar, clears
+  the highlights and empties the boxes of the Positional window for the next order.
 - **Data**: lists the labeled selections with their candle counts. *Export to JSON*
   and *Export to XML* write all selections to `data/labeled_data/selections_YYYYmmdd_HHMMSS.json`
   or `.xml`. *Add To Existing...* opens a file dialog in `data/labeled_data` and

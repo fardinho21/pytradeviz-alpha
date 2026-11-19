@@ -10,7 +10,9 @@ from tkinter import ttk
 from types import SimpleNamespace
 from typing import Tuple
 
-from drawings import BOX, DASHED, DOTTED, ELLIPSE, LINE, SEGMENT, TOOLBOX_FADE_STIPPLE
+from drawings import (
+    BOX, DASHED, DOTTED, ELLIPSE, LINE, SEGMENT, TOOLBOX_FADE_STIPPLE, TOOLBOX_PADDING,
+)
 from pytradeviz import PyTradeViz
 from test_roi import load_price_rows
 
@@ -229,9 +231,9 @@ class DrawModeTests(unittest.TestCase):
         self.set_tool(BOX)
         self.draw((100, 100), (220, 180))
         self.viz.activate_draw_button(("tool", BOX))
-        self.viz.update_draw_cursor(self.event_at(160, 140))
+        self.viz.update_hover_cursor(self.event_at(160, 140))
         self.assertEqual(self.viz.canvas.cget("cursor"), "fleur")
-        self.viz.update_draw_cursor(self.event_at(500, 400))
+        self.viz.update_hover_cursor(self.event_at(500, 400))
         self.assertEqual(self.viz.canvas.cget("cursor"), "")
 
     def test_cursor_resets_when_leaving_draw_mode(self) -> None:
@@ -363,6 +365,142 @@ class DrawModeTests(unittest.TestCase):
         self.viz.window.update()
         self.assertEqual(self.toolbox_stipples(), {""})
         self.release(100, 100)
+
+    # Moving the toolbox. Positions are relative to the visible part of the canvas.
+
+    def toolbox_bounds(self) -> Tuple[float, float, float, float]:
+        origin_x, origin_y = self.view_origin()
+        left, top, right, bottom = self.viz._toolbox.bounds
+        return left - origin_x, top - origin_y, right - origin_x, bottom - origin_y
+
+    def empty_toolbox_spot(self) -> Tuple[float, float]:
+        """A point in the toolbox padding, clear of every button."""
+        left, top, _, _ = self.toolbox_bounds()
+        x, y = left + TOOLBOX_PADDING / 2, top + TOOLBOX_PADDING / 2
+        self.assertIsNone(self.viz._toolbox.button_at(*self.to_canvas(x, y)))
+        return x, y
+
+    def shifted(self, bounds: Tuple[float, float, float, float], dx: float, dy: float):
+        return tuple(value + delta for value, delta in zip(bounds, (dx, dy, dx, dy)))
+
+    def assertBoundsEqual(self, first, second) -> None:
+        for value, other in zip(first, second):
+            self.assertAlmostEqual(value, other, delta=1)
+
+    def test_dragging_an_empty_spot_moves_the_toolbox_and_its_buttons(self) -> None:
+        self.enter_mode()
+        before = self.toolbox_bounds()
+        button_before = self.toolbox_button(("tool", BOX)).bounds
+        x, y = self.empty_toolbox_spot()
+        self.press(x, y)
+        self.drag(x - 200, y - 150)
+        self.assertBoundsEqual(self.toolbox_bounds(), self.shifted(before, -200, -150))
+        self.release(x - 200, y - 150)
+        self.viz.window.update()
+        self.assertBoundsEqual(self.toolbox_bounds(), self.shifted(before, -200, -150))
+        self.assertBoundsEqual(
+            self.toolbox_button(("tool", BOX)).bounds, self.shifted(button_before, -200, -150))
+        self.assertIsNone(self.viz.draw_tool)
+        self.assertEqual(self.viz.drawings, ())
+
+    def test_toolbox_drag_does_not_scroll_the_chart(self) -> None:
+        self.enter_mode()
+        view_before = (self.viz.canvas.xview(), self.viz.canvas.yview())
+        x, y = self.empty_toolbox_spot()
+        self.press(x, y)
+        self.drag(x - 100, y - 100)
+        self.release(x - 100, y - 100)
+        self.viz.window.update()
+        self.assertEqual((self.viz.canvas.xview(), self.viz.canvas.yview()), view_before)
+
+    def test_moved_toolbox_stays_fixed_on_screen_while_scrolling(self) -> None:
+        self.enter_mode()
+        x, y = self.empty_toolbox_spot()
+        self.draw((x, y), (x - 200, y - 150))
+        moved = self.toolbox_bounds()
+        self.viz.canvas.xview_moveto(0.5)
+        self.viz.canvas.yview_moveto(0.2)
+        self.viz.window.update()
+        self.viz.draw_overlays()
+        self.assertBoundsEqual(self.toolbox_bounds(), moved)
+
+    def test_moved_toolbox_keeps_its_place_when_draw_mode_is_re_entered(self) -> None:
+        self.enter_mode()
+        x, y = self.empty_toolbox_spot()
+        self.draw((x, y), (x - 200, y - 150))
+        moved = self.toolbox_bounds()
+        self.viz.exit_modes()
+        self.viz.window.update()
+        self.viz.fib_button.invoke()
+        self.viz.window.update()
+        self.assertBoundsEqual(self.toolbox_bounds(), moved)
+
+    def test_toolbox_cannot_be_dragged_out_of_the_view(self) -> None:
+        self.enter_mode()
+        left, top, right, bottom = self.toolbox_bounds()
+        width, height = right - left, bottom - top
+        x, y = self.empty_toolbox_spot()
+        self.draw((x, y), (x - 5000, y - 5000))
+        self.assertBoundsEqual(self.toolbox_bounds(), (0, 0, width, height))
+        x, y = self.empty_toolbox_spot()
+        self.draw((x, y), (x + 5000, y + 5000))
+        view_right = self.viz.canvas.winfo_width()
+        view_bottom = self.viz.canvas.winfo_height()
+        self.assertBoundsEqual(
+            self.toolbox_bounds(),
+            (view_right - width, view_bottom - height, view_right, view_bottom))
+
+    def test_toolbox_is_pushed_back_inside_when_the_window_shrinks(self) -> None:
+        self.enter_mode()
+        x, y = self.empty_toolbox_spot()
+        self.draw((x, y), (x + 5000, y + 5000))  # flush with the bottom-right corner
+        self.viz.window.geometry("1020x750")
+        self.viz.window.update()
+        _, _, right, bottom = self.toolbox_bounds()
+        self.assertLessEqual(right, self.viz.canvas.winfo_width() + 1)
+        self.assertLessEqual(bottom, self.viz.canvas.winfo_height() + 1)
+
+    def test_dragging_from_a_button_does_not_move_the_toolbox(self) -> None:
+        self.enter_mode()
+        before = self.toolbox_bounds()
+        origin_x, origin_y = self.view_origin()
+        left, top, right, bottom = self.toolbox_button(("tool", BOX)).bounds
+        x, y = (left + right) / 2 - origin_x, (top + bottom) / 2 - origin_y
+        self.press(x, y)
+        self.drag(x - 200, y - 150)
+        self.release(x - 200, y - 150)
+        self.viz.window.update()
+        self.assertBoundsEqual(self.toolbox_bounds(), before)
+        self.assertIsNone(self.viz.draw_tool)
+
+    def test_click_on_an_empty_toolbox_spot_changes_nothing(self) -> None:
+        self.set_tool(BOX)
+        before = self.toolbox_bounds()
+        self.click(*self.empty_toolbox_spot())
+        self.viz.window.update()
+        self.assertBoundsEqual(self.toolbox_bounds(), before)
+        self.assertEqual(self.viz.draw_tool, BOX)
+        self.assertEqual(self.viz.drawings, ())
+
+    def test_toolbox_fades_while_it_is_being_dragged(self) -> None:
+        self.enter_mode()
+        x, y = self.empty_toolbox_spot()
+        self.press(x, y)
+        self.drag(x - 100, y - 100)
+        self.assertEqual(self.toolbox_stipples(), {TOOLBOX_FADE_STIPPLE})
+        self.release(x - 100, y - 100)
+        self.viz.window.update()
+        self.assertEqual(self.toolbox_stipples(), {""})
+
+    def test_hover_over_an_empty_toolbox_spot_shows_move_cursor(self) -> None:
+        self.enter_mode()
+        self.viz.update_hover_cursor(self.event_at(*self.empty_toolbox_spot()))
+        self.assertEqual(self.viz.canvas.cget("cursor"), "fleur")
+        origin_x, origin_y = self.view_origin()
+        left, top, right, bottom = self.toolbox_button(("tool", BOX)).bounds
+        self.viz.update_hover_cursor(
+            self.event_at((left + right) / 2 - origin_x, (top + bottom) / 2 - origin_y))
+        self.assertEqual(self.viz.canvas.cget("cursor"), "hand2")
 
 
 if __name__ == "__main__":

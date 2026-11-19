@@ -10,8 +10,9 @@ import os
 import platform
 import dataclasses
 from types import ModuleType
-from typing import Any, Dict, List, Optional, Protocol, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Set, Tuple
 from candle import Candle
+from cursors import MOVE_CURSOR, POINTING_HAND, closed_hand_candidates, first_supported_cursor
 import datetime as datetime
 import math
 from indicators import (
@@ -44,6 +45,10 @@ from labeled_selections import (
 )
 from data_window import data_window_days, range_difference, row_ordinal, window_index_range
 from paginated_price_data import PaginatedPriceData
+from strategies import (
+    Trade, is_price_text, is_roi_text, is_stop_loss_text, positional_levels, positional_trades,
+    price_text, stop_price_text, target_price_text,
+)
 from timeframes import (
     DAILY, TIMEFRAMES, candle_ids, candle_last_rows, shows_day_labels, timeframe_rows,
 )
@@ -224,6 +229,9 @@ class PyTradeViz:
     click_drag_threshold: int = 5
     selection_mode: bool = False
     selected_indices: Set[int]
+    # Candles that trades of a strategy test were made on. They are highlighted like the
+    # selection for as long as the results of the test are open.
+    trade_indices: Set[int]
     # Box as (left x, right x, top price, bottom price). x is unscaled so the
     # box follows the candles through zoom and resize.
     _selection_box: Optional[Tuple[float, float, float, float]] = None
@@ -263,6 +271,13 @@ class PyTradeViz:
     _draw_selected: Optional[int] = None
     _draw_gesture: Optional[Dict[str, Any]] = None
     _toolbox: Optional[Toolbox] = None
+    # Where the user dragged the toolbox, as its (left, top) from the top-left of the view.
+    # None is the default bottom-right corner. Kept for the session, across tabs and files.
+    _toolbox_position: Optional[Point] = None
+    # Cursor shown while a canvas is dragged to scroll the chart: the closed fist where Tk has
+    # one, resolved at start-up. The canvas showing it is remembered until the button is released.
+    drag_cursor: str = MOVE_CURSOR
+    _drag_cursor_widget: Optional[tk.Canvas] = None
     # The series drawn on the indicator canvas, one of INDICATOR_MODES.
     indicator_mode: str = "RSI"
     # Toggle box bounds in indicator canvas coordinates, keyed by mode.
@@ -300,6 +315,7 @@ class PyTradeViz:
         self.active_timeframe = DAILY
         self._tab_states: Dict[str, ChartTabState] = {}
         self.selected_indices = set()
+        self.trade_indices = set()
         self.labeled_selections = {}
         self.data_source = data_source
         # Parameters for each indicator; each timeframe tab keeps its own copy.
@@ -335,6 +351,7 @@ class PyTradeViz:
 
         #set up window and frames
         self.initialize_window(tk)
+        self.drag_cursor = first_supported_cursor(self.window, closed_hand_candidates())
         self.initialize_menu_bar(tk)
 
         #set up frames
@@ -395,15 +412,22 @@ class PyTradeViz:
         self.window.geometry(self.window_geo)
         self.window.minsize(self.window_min_width, self.window_min_height)
         self.window.resizable(True, True)
+        # Every button and drop-down menu made from now on, in this window and in the settings
+        # windows, shows the pointing hand. The menubar itself is set in initialize_menu_bar.
+        for pattern in ("*Button.cursor", "*TButton.cursor", "*Menu.cursor"):
+            self.window.option_add(pattern, POINTING_HAND)
 
     def initialize_menu_bar(self, tk: ModuleType) -> None:
         self.menu_bar = tk.Menu(self.window, tearoff=0)
         self.menu_bar.add_cascade(label="File", menu=self.initialize_file_menu(tk))
         self.menu_bar.add_cascade(label="Indicators", menu=self.initialize_indicators_menu(tk))
-        self.menu_bar.add_command(label="Strategies", command=self.open_strategies)
+        self.menu_bar.add_cascade(label="Strategies", menu=self.initialize_strategies_menu(tk))
         self.menu_bar.add_command(label="Data", command=lambda: self.open_data_window(tk))
         self.menu_bar.add_command(label="Reset", command=lambda: self.open_reset_window(tk))
         self.window.configure(menu=self.menu_bar)
+        # Attaching the bar resets its cursor, so the pointing hand is set afterwards. Tk passes
+        # it on to the copy of the bar that it draws along the top of the window.
+        self.menu_bar.configure(cursor=POINTING_HAND)
 
     def initialize_file_menu(self, tk: ModuleType) -> Any:
         file_menu = tk.Menu(self.menu_bar, tearoff=0)
@@ -662,6 +686,7 @@ class PyTradeViz:
         self.clear_draw_state()
         self.clear_sr_state()
         self.selected_indices = set()
+        self.trade_indices = set()
         self._selection_box = None
         self._box_origin = None
         self._box_current = None
@@ -746,9 +771,243 @@ class PyTradeViz:
         tk.Label(window, text=about_text, justify="left", padx=16, pady=12).pack()
         tk.Button(window, text="OK", width=8, command=window.destroy).pack(pady=(0, 12))
 
-    def open_strategies(self) -> None:
-        # Placeholder until strategies are implemented.
-        pass
+    def initialize_strategies_menu(self, tk: ModuleType) -> Any:
+        strategies_menu = tk.Menu(self.menu_bar, tearoff=0)
+        strategies_menu.add_command(
+            label="Positional", command=lambda: self.open_positional_window(tk),
+        )
+        # Indicator based strategies are not built yet, so this item does nothing.
+        strategies_menu.add_command(label="Indicator Based")
+        return strategies_menu
+
+    def open_positional_window(self, tk: ModuleType) -> None:
+        window = self.open_modal_window(tk, "Positional Strategy")
+        self.build_positional_content(tk, window)
+
+    def build_positional_content(self, tk: ModuleType, window: Any) -> None:
+        entry_price, roi, target, stop_loss, stop = (tk.StringVar(window) for _ in range(5))
+
+        def show_prices(*_: Any) -> None:
+            target.set(target_price_text(entry_price.get(), roi.get()))
+            stop.set(stop_price_text(entry_price.get(), stop_loss.get()))
+
+        # The target and stop prices follow every change to the other three boxes. The trace
+        # command belongs to the window, so closing the window releases the variables.
+        # Variable.trace_add would keep them alive until the program exits.
+        show = window.register(show_prices)
+        for variable in (entry_price, roi, stop_loss):
+            window.tk.call("trace", "add", "variable", str(variable), "write", show)
+
+        # The two rows describe the order. The entry price, ROI and stop loss boxes refuse any
+        # edit that would leave something other than a number, and the target and stop prices
+        # cannot be edited.
+        order = tk.Frame(window)
+        order.pack(fill="x", padx=12, pady=(12, 0))
+        tk.Label(order, text="Entry price").grid(row=0, column=0, sticky="w")
+        entry_price_box = tk.Entry(
+            order, textvariable=entry_price, width=14,
+            validate="key", validatecommand=(window.register(is_price_text), "%P"),
+        )
+        entry_price_box.grid(row=0, column=1, padx=(6, 16))
+        tk.Label(order, text="ROI (%)").grid(row=0, column=2, sticky="w")
+        tk.Entry(
+            order, textvariable=roi, width=8,
+            validate="key", validatecommand=(window.register(is_roi_text), "%P"),
+        ).grid(row=0, column=3, padx=(6, 16))
+        tk.Label(order, text="Target price").grid(row=0, column=4, sticky="w")
+        tk.Entry(order, textvariable=target, width=14, state="readonly").grid(
+            row=0, column=5, padx=(6, 0))
+        # The stop loss is under the ROI, and the stop price under the target price.
+        tk.Label(order, text="Stop loss (%)").grid(row=1, column=2, sticky="w", pady=(8, 0))
+        tk.Entry(
+            order, textvariable=stop_loss, width=8,
+            validate="key", validatecommand=(window.register(is_stop_loss_text), "%P"),
+        ).grid(row=1, column=3, padx=(6, 16), pady=(8, 0))
+        tk.Label(order, text="Stop price").grid(row=1, column=4, sticky="w", pady=(8, 0))
+        tk.Entry(order, textvariable=stop, width=14, state="readonly").grid(
+            row=1, column=5, padx=(6, 0), pady=(8, 0))
+        entry_price_box.focus_set()
+
+        def reset() -> None:
+            # Emptying the three boxes empties the target and stop prices as well.
+            for variable in (entry_price, roi, stop_loss):
+                variable.set("")
+            # The boxes are gone when this runs because the window is closing.
+            if entry_price_box.winfo_exists():
+                entry_price_box.focus_set()
+
+        testing = False
+
+        def test() -> None:
+            # Showing the results runs the event loop until their window appears, and a second
+            # click on Test in that time must not start another test.
+            nonlocal testing
+            if testing:
+                return
+            testing = True
+            try:
+                self.run_positional_test(
+                    tk, window, entry_price.get(), roi.get(), stop_loss.get(), reset)
+            finally:
+                testing = False
+
+        buttons = tk.Frame(window)
+        buttons.pack(fill="x", padx=12, pady=12)
+        tk.Button(buttons, text="Test", width=8, command=test).pack(side="left")
+        tk.Button(buttons, text="Cancel", width=8, command=window.destroy).pack(side="left", padx=(8, 0))
+
+    def run_positional_test(
+        self, tk: ModuleType, window: Any, entry_price_text: str, roi_text: str,
+        stop_loss_text: str, reset: Callable[[], None],
+    ) -> None:
+        """Test the order typed in the Positional window on the loaded daily candles, then list its trades.
+
+        ``reset`` empties the boxes of the window. It is called when the list is closed.
+        """
+        if not self._daily_rows:
+            messagebox.showerror("Unable to test", "No price data is loaded.", parent=window)
+            return
+        try:
+            entry_price, target, stop = positional_levels(entry_price_text, roi_text, stop_loss_text)
+        except ValueError as error:
+            messagebox.showerror("Invalid setting", str(error), parent=window)
+            return
+        trades = positional_trades(self._daily_rows, entry_price, target, stop)
+        self.open_positional_results_window(tk, window, trades, reset)
+
+    def open_positional_results_window(
+        self, tk: ModuleType, parent: Any, trades: List[Trade], reset: Callable[[], None],
+    ) -> None:
+        """List the trades of a positional test and highlight their candles until the list is closed."""
+        window = self.open_modal_window(tk, "Positional Strategy Results", parent=parent)
+        rows = self._daily_rows
+
+        def date(index: int) -> str:
+            return "-".join(rows[index][0])
+
+        tested = f"{len(rows)} daily candles tested, from {date(0)} to {date(-1)}."
+        if trades:
+            summary = f"{len(trades)} trade{'' if len(trades) == 1 else 's'}. {tested}"
+            hint = "Select a trade to show it on the chart."
+        else:
+            summary = f"No trades. {tested}"
+            hint = "No candle reached the entry price."
+        tk.Label(window, text=f"{summary}\n{hint}", justify="left", anchor="w").pack(
+            fill="x", padx=12, pady=(12, 0))
+
+        listing = tk.Frame(window)
+        listing.pack(fill="both", expand=True, padx=12, pady=(8, 0))
+        columns = ("Entry date", "Entry price", "Sell date", "Sell price")
+        tree = ttk.Treeview(listing, columns=columns, show="headings", height=12, selectmode="browse")
+        for column in columns:
+            tree.heading(column, text=column, anchor="w")
+            tree.column(column, width=130, anchor="w")
+        scrollbar = tk.Scrollbar(listing, command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        tree.pack(side="left", fill="both", expand=True)
+        for number, trade in enumerate(trades):
+            sold = trade.sell_index is not None
+            tree.insert("", "end", iid=str(number), values=(
+                date(trade.buy_index), price_text(trade.buy_price),
+                date(trade.sell_index) if sold else "Still open",
+                price_text(trade.sell_price) if sold else "",
+            ))
+        tk.Button(window, text="Close", width=8, command=window.destroy).pack(pady=12)
+
+        # The candles of the active tab that hold the days each trade was bought and sold on.
+        ids, _ = self.timeframe_map()
+        candles = [
+            (ids[trade.buy_index], None if trade.sell_index is None else ids[trade.sell_index])
+            for trade in trades
+        ]
+
+        def show_selected(_event: Any) -> None:
+            for item in tree.selection():
+                buy, sell = candles[int(item)]
+                self.show_trade_on_chart(
+                    buy, sell, float(trades[int(item)].buy_price), (parent, window))
+
+        def close(event: Any) -> None:
+            if event.widget is not window:
+                return
+            # The chart is gone before this window when the whole program is closing.
+            if self.canvas.winfo_exists():
+                self.set_trade_highlights(set())
+            reset()
+            self.return_grab(event, window, parent)
+
+        tree.bind("<<TreeviewSelect>>", show_selected)
+        window.bind("<Destroy>", close)
+        # Only the trades are highlighted while the list is open, so a selection made on the
+        # chart is dropped first.
+        self._roi_span = None
+        self.roi_header = None
+        self.roi_results = None
+        self.set_selection(set(), None)
+        self.set_trade_highlights(
+            {index for pair in candles for index in pair if index is not None})
+        if trades:
+            # The first trade is shown beside this window, which needs its full size for that.
+            window.update_idletasks()
+            tree.selection_set("0")
+            tree.focus("0")
+            tree.focus_set()
+
+    def set_trade_highlights(self, indices: Set[int]) -> None:
+        changed = self.trade_indices ^ indices
+        self.trade_indices = set(indices)
+        self.restyle_candles(changed)
+
+    def show_trade_on_chart(
+        self, buy: int, sell: Optional[int], entry_price: float, windows: Sequence[Any],
+    ) -> None:
+        """Scroll the chart to the candles that a trade was bought and sold on.
+
+        The two are centred in the part of the chart that ``windows`` leave uncovered, when
+        both fit there. Candles too far apart for that leave the buy candle centred at the
+        entry price, and candles too tall for the chart stay side by side at the entry price.
+        """
+        left, right = self.uncovered_chart_span(windows)
+        height = self.canvas.winfo_height()
+        x = self.candle_x(buy)
+        y = self.price_to_y(entry_price)
+        if sell is not None:
+            sell_x = self.candle_x(sell)
+            candle_width = self.chart_grid_divider_v * self._scale_x
+            if sell_x - x + candle_width <= right - left:
+                x = (x + sell_x) / 2
+                rows = (self.price_data[buy], self.price_data[sell])
+                top = self.price_to_y(max(row[2] for row in rows))
+                bottom = self.price_to_y(min(row[3] for row in rows))
+                if bottom - top <= height:
+                    y = (top + bottom) / 2
+        # The scroll commands of the chart redraw its overlays for the new view.
+        self.canvas.xview_moveto((x - (left + right) / 2) / self.chart_grid_space_x)
+        self.canvas.yview_moveto((y - height / 2) / self.chart_grid_space_y)
+
+    def uncovered_chart_span(self, windows: Sequence[Any]) -> Tuple[float, float]:
+        """The left and right x, in the chart view, of its widest part that none of ``windows`` lies over.
+
+        It is the whole view when they leave no room for a candle.
+        """
+        left, top = self.canvas.winfo_rootx(), self.canvas.winfo_rooty()
+        width, height = self.canvas.winfo_width(), self.canvas.winfo_height()
+        covered = sorted(
+            (window.winfo_rootx() - left, window.winfo_rootx() - left + window.winfo_width())
+            for window in windows
+            if window.winfo_rooty() < top + height and window.winfo_rooty() + window.winfo_height() > top
+        )
+        # Each gap runs from the furthest right edge so far to the left edge of the next window.
+        gaps = []
+        start = 0
+        for first, last in covered + [(width, width)]:
+            gaps.append((start, min(first, width)))
+            start = max(start, last)
+        gap_left, gap_right = max(gaps, key=lambda gap: gap[1] - gap[0])
+        if gap_right - gap_left < self.chart_grid_divider_v * self._scale_x:
+            return 0, width
+        return gap_left, gap_right
 
     def open_data_window(self, tk: ModuleType) -> None:
         window = self.open_modal_window(tk, "Data")
@@ -2092,6 +2351,7 @@ class PyTradeViz:
         if self._sr_popups and self.moved_past_click_threshold(event):
             # Popups are placed in canvas coordinates, so a drag would leave them behind.
             self.dismiss_sr_popups()
+        self.show_drag_cursor(event.widget)
         if event.widget is self.canvas:
             self.canvas.scan_dragto(event.x, event.y, gain=1)
         elif event.widget is self.canvas_price:
@@ -2099,6 +2359,23 @@ class PyTradeViz:
         else:
             self.canvas.scan_dragto(event.x, 0, gain=1)
         self.draw_crosshair()
+
+    def show_drag_cursor(self, widget: tk.Canvas) -> None:
+        """Show the closed fist on the canvas being dragged, until end_canvas_drag."""
+        if self._drag_cursor_widget is None:
+            widget.configure(cursor=self.drag_cursor)
+            self._drag_cursor_widget = widget
+
+    def end_canvas_drag(self, event: tk.Event) -> None:
+        """Put the cursor back after a drag, to whatever suits the point now under the pointer."""
+        widget = self._drag_cursor_widget
+        if widget is None:
+            return
+        self._drag_cursor_widget = None
+        if event.widget is widget:
+            self.update_hover_cursor(event)
+        else:
+            widget.configure(cursor="")
 
     def initialize_candle_info(self, tk: ModuleType) -> None:
         self.candle_info_label = tk.Label(
@@ -2231,8 +2508,7 @@ class PyTradeViz:
 
     def track_crosshair(self, event: tk.Event) -> None:
         self.crosshair_root = (event.x_root, event.y_root)
-        if self.draw_mode and event.widget is self.canvas:
-            self.update_draw_cursor(event)
+        self.update_hover_cursor(event)
         self.draw_crosshair()
 
     def hide_crosshair(self, _event: tk.Event) -> None:
@@ -2352,12 +2628,12 @@ class PyTradeViz:
     def style_candle_item(self, item: int, index: int) -> None:
         _, open_, _, _, close = self.price_data[index][:5]
         color = Candle.color_for(open_, close)
-        selected = index in self.selected_indices
-        if selected:
+        highlighted = index in self.selected_indices or index in self.trade_indices
+        if highlighted:
             color = self.highlight_color(color)
         if self.canvas.type(item) == "rectangle":
-            # Selected bodies are always solid so the highlight fills them in dark mode too.
-            Candle.style_body(self.canvas, item, self.dark_mode and not selected, color)
+            # Highlighted bodies are always solid so the highlight fills them in dark mode too.
+            Candle.style_body(self.canvas, item, self.dark_mode and not highlighted, color)
         else:
             self.canvas.itemconfigure(item, fill=color)
 
@@ -2530,7 +2806,7 @@ class PyTradeViz:
         # so it stays fixed on screen while the chart scrolls.
         self.trend_toggle_label = tk.Label(
             self.frame_canvas, text=TREND_TOGGLE_LABEL, relief="solid", bd=1,
-            padx=INDICATOR_TOGGLE_PADDING, cursor="hand2",
+            padx=INDICATOR_TOGGLE_PADDING, cursor=POINTING_HAND,
         )
         self.trend_toggle_label.bind("<Button-1>", lambda _event: self.toggle_trend())
         self.trend_toggle_label.place_forget()
@@ -2934,9 +3210,13 @@ class PyTradeViz:
         if not self.draw_mode:
             return
         theme = self.get_theme()
-        toolbox = toolbox_layout(self.canvas_view_bounds(), tuple(self.sma_colors))
+        view = self.canvas_view_bounds()
+        toolbox = toolbox_layout(view, tuple(self.sma_colors), self._toolbox_position)
         self._toolbox = toolbox
-        # Stippled while a feature is being drawn or moved, so candles behind the toolbox show through.
+        if self._toolbox_position is not None:
+            # Keep the clamped position, so a toolbox pushed in by a smaller window stays put.
+            self._toolbox_position = (toolbox.bounds[0] - view[0], toolbox.bounds[1] - view[1])
+        # Stippled while a feature or the toolbox itself is being dragged, so candles behind it show through.
         stipple = TOOLBOX_FADE_STIPPLE if self.toolbox_faded() else ""
         left, top, right, bottom = toolbox.bounds
         self.create_toolbox_box(
@@ -2966,7 +3246,8 @@ class PyTradeViz:
 
     def toolbox_faded(self) -> bool:
         gesture = self._draw_gesture
-        return gesture is not None and gesture["kind"] in ("draw", "move") and gesture["moved"]
+        return (gesture is not None and gesture["moved"]
+                and gesture["kind"] in ("draw", "move", "toolbox_move"))
 
     def create_toolbox_box(
         self, left: float, top: float, right: float, bottom: float, fill: str, outline: str,
@@ -3047,21 +3328,56 @@ class PyTradeViz:
         self._draw_selected = None
         self.commit_drawings(())
 
-    def update_draw_cursor(self, event: tk.Event) -> None:
-        x = self.canvas.canvasx(event.x)
-        y = self.canvas.canvasy(event.y)
-        over_toolbox = self._toolbox is not None and self._toolbox.contains(x, y)
-        over_drawing = not over_toolbox and self.drawing_at(x, y) is not None
-        self.canvas.configure(cursor="fleur" if over_drawing else "")
+    def update_hover_cursor(self, event: tk.Event) -> None:
+        """Set the cursor of the canvas under the pointer for what lies beneath it.
+
+        A pointing hand marks a button, the move cursor marks something that can be dragged
+        into place, and everything else gets the arrow.
+        """
+        widget = event.widget
+        if widget is self.canvas:
+            cursor = self.chart_hover_cursor(self.canvas.canvasx(event.x), self.canvas.canvasy(event.y))
+        elif widget is self.canvas_indicators:
+            clickable = self.indicator_info_at(event) or self.indicator_toggle_at(event) is not None
+            cursor = POINTING_HAND if clickable else ""
+        else:
+            cursor = ""
+        if str(widget.cget("cursor")) != cursor:
+            widget.configure(cursor=cursor)
+
+    def chart_hover_cursor(self, x: float, y: float) -> str:
+        """The cursor for canvas point (x, y) on the price chart in the active mode."""
+        if self.draw_mode:
+            if self._toolbox is not None and self._toolbox.contains(x, y):
+                button = self._toolbox.button_at(x, y)
+                if button is None:
+                    # An empty spot on the toolbox can be dragged to move it.
+                    return MOVE_CURSOR
+                return POINTING_HAND if self.toolbox_enabled(button.key) else ""
+            return MOVE_CURSOR if self.drawing_at(x, y) is not None else ""
+        if self.sr_mode:
+            popup = self.sr_popup_at(x, y)
+            return POINTING_HAND if popup is not None and popup.enabled else ""
+        return ""
 
     def start_draw_gesture(self, event: tk.Event) -> bool:
-        """Start a toolbox press, a move, or a new drawing. Returns False to scroll instead."""
+        """Start a toolbox press or drag, a move, or a new drawing. Returns False to scroll instead."""
         x = self.canvas.canvasx(event.x)
         y = self.canvas.canvasy(event.y)
         if self._toolbox is not None and self._toolbox.contains(x, y):
             button = self._toolbox.button_at(x, y)
+            if button is None:
+                # Pressing an empty spot on the toolbox starts dragging the toolbox itself.
+                view_left, view_top, _, _ = self.canvas_view_bounds()
+                left, top, _, _ = self._toolbox.bounds
+                self._draw_gesture = {
+                    "kind": "toolbox_move", "moved": False,
+                    "origin": (left - view_left, top - view_top),
+                    "start": (x, y), "end": (x, y),
+                }
+                return True
             self._draw_gesture = {
-                "kind": "toolbox", "moved": False, "key": button.key if button else None,
+                "kind": "toolbox", "moved": False, "key": button.key,
                 "start": (x, y), "end": (x, y),
             }
             return True
@@ -3091,6 +3407,15 @@ class PyTradeViz:
         x = self.canvas.canvasx(event.x)
         y = self.canvas.canvasy(event.y)
         gesture["end"] = (x, y)
+        if gesture["kind"] == "toolbox_move":
+            if gesture["moved"]:
+                # Offset from where the toolbox was when the press began, so the grip point
+                # under the cursor stays the same for the whole drag.
+                origin_x, origin_y = gesture["origin"]
+                start_x, start_y = gesture["start"]
+                self._toolbox_position = (origin_x + x - start_x, origin_y + y - start_y)
+            self.draw_toolbox()
+            return True
         if gesture["kind"] == "move" and gesture["moved"]:
             # Move from the drawing's position when the gesture started, not from its last step.
             start_index, start_price = self.chart_point(*gesture["start"])
@@ -3118,6 +3443,10 @@ class PyTradeViz:
             button = self._toolbox.button_at(x, y) if self._toolbox is not None else None
             if button is not None and button.key == gesture["key"]:
                 self.activate_draw_button(button.key)
+            return
+        if kind == "toolbox_move":
+            # The toolbox already sits where the drag left it; this redraws it solid.
+            self.refresh_drawing_layer()
             return
         if kind == "move":
             if gesture["moved"]:
@@ -3343,6 +3672,8 @@ class PyTradeViz:
         for canvas in (
             self.canvas, self.canvas_price, self.canvas_date, self.canvas_indicators
         ):
+            # Added after select_candle on the chart canvas, so the drag ends after the click is handled.
+            canvas.bind("<ButtonRelease-1>", self.end_canvas_drag, add="+")
             canvas.bind("<Shift-MouseWheel>", self.scale_candle_height)
             canvas.bind("<Shift-Button-4>", self.scale_candle_height)
             canvas.bind("<Shift-Button-5>", self.scale_candle_height)

@@ -143,6 +143,32 @@ class ToolboxLayoutTests(unittest.TestCase):
         self.assertGreaterEqual(left, 0.0)
         self.assertGreaterEqual(top, 0.0)
 
+    def test_position_places_toolbox_relative_to_view_corner(self) -> None:
+        default = toolbox_layout(VIEW, COLORS)
+        size = (default.bounds[2] - default.bounds[0], default.bounds[3] - default.bounds[1])
+        toolbox = toolbox_layout(VIEW, COLORS, (20.0, 30.0))
+        self.assertEqual(toolbox.bounds[:2], (20.0, 30.0))
+        self.assertEqual((toolbox.bounds[2] - 20.0, toolbox.bounds[3] - 30.0), size)
+        # The same position on a scrolled view lands at the same spot on screen.
+        scrolled = toolbox_layout((100.0, 50.0, 580.0, 350.0), COLORS, (20.0, 30.0))
+        self.assertEqual(scrolled.bounds[:2], (120.0, 80.0))
+        for button, moved in zip(toolbox.buttons, scrolled.buttons):
+            self.assertEqual(moved.key, button.key)
+            self.assertEqual(
+                moved.bounds,
+                (button.bounds[0] + 100, button.bounds[1] + 50,
+                 button.bounds[2] + 100, button.bounds[3] + 50),
+            )
+
+    def test_position_is_clamped_inside_view(self) -> None:
+        too_far_up_left = toolbox_layout(VIEW, COLORS, (-50.0, -80.0))
+        self.assertEqual(too_far_up_left.bounds[:2], (VIEW[0], VIEW[1]))
+        too_far_down_right = toolbox_layout(VIEW, COLORS, (10000.0, 10000.0))
+        self.assertEqual(too_far_down_right.bounds[2:], (VIEW[2], VIEW[3]))
+        for button in too_far_down_right.buttons:
+            self.assertTrue(too_far_down_right.contains(*button.bounds[:2]))
+            self.assertTrue(too_far_down_right.contains(*button.bounds[2:]))
+
 
 if __name__ == "__main__":
     unittest.main()

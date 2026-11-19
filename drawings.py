@@ -3,6 +3,10 @@
 Drawings are stored in chart units, (candle position, price), so they stay put when the
 chart is zoomed, scrolled, or resized. Clipping, hit tests, and the toolbox layout work in
 canvas coordinates. A bounds tuple is (left, top, right, bottom).
+
+The toolbox sits in the bottom-right corner of the view until the user drags it. A dragged
+position is kept as an offset from the top-left corner of the view, so the toolbox stays
+fixed on screen while the chart scrolls, and it is clamped so it never leaves the view.
 """
 
 from __future__ import annotations
@@ -222,8 +226,16 @@ def button_width(key: ToolKey) -> int:
     return SWATCH_WIDTH if key[0] == "color" else BUTTON_WIDTH
 
 
-def toolbox_layout(view: Bounds, colors: Sequence[str]) -> Toolbox:
-    """Place the toolbox in the bottom-right corner of the view, rows centred on each other."""
+def toolbox_layout(
+    view: Bounds, colors: Sequence[str], position: Optional[Point] = None,
+) -> Toolbox:
+    """Lay out the toolbox inside the view, rows centred on each other.
+
+    Without ``position`` the toolbox sits in the bottom-right corner, a margin in from the
+    edges. ``position`` is where the user dragged it: the (left, top) of the toolbox measured
+    from the top-left corner of the view. Either way the toolbox is clamped so it stays
+    inside the view, which keeps it on screen after the window is resized.
+    """
     rows = toolbox_rows(colors)
     row_widths = [
         sum(button_width(key) for key, _ in row) + (len(row) - 1) * BUTTON_GAP for row in rows
@@ -232,10 +244,16 @@ def toolbox_layout(view: Bounds, colors: Sequence[str]) -> Toolbox:
     width = content_width + 2 * TOOLBOX_PADDING
     height = (len(rows) * BUTTON_HEIGHT + (len(rows) - 1) * ROW_GAP
               + 2 * TOOLBOX_PADDING)
-    right = view[2] - TOOLBOX_MARGIN
-    bottom = view[3] - TOOLBOX_MARGIN
-    left = max(right - width, view[0])
-    top = max(bottom - height, view[1])
+    if position is None:
+        left = view[2] - TOOLBOX_MARGIN - width
+        top = view[3] - TOOLBOX_MARGIN - height
+    else:
+        left = view[0] + position[0]
+        top = view[1] + position[1]
+    left = max(min(left, view[2] - width), view[0])
+    top = max(min(top, view[3] - height), view[1])
+    right = left + width
+    bottom = top + height
     buttons = []
     for row_index, row in enumerate(rows):
         row_left = left + TOOLBOX_PADDING + (content_width - row_widths[row_index]) / 2
