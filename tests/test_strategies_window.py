@@ -28,6 +28,10 @@ def collect_callback_errors(test: unittest.TestCase, window: tk.Tk) -> List[str]
         errors.append("".join(traceback.format_exception(*error)))
 
     window.report_callback_exception = record
+    # A call that Tcl was left to make later fails without a word when its command is gone by
+    # then, because tkinter ignores the errors of the event loop.
+    window.tk.createcommand("record_background_error", lambda message, _options: errors.append(message))
+    window.tk.call("interp", "bgerror", "", "record_background_error")
     test.addCleanup(lambda: test.assertEqual(errors, []))
     return errors
 
@@ -85,6 +89,19 @@ def find_button(window: tk.Misc, text: str) -> tk.Button:
     return next(b for b in descendants(window, tk.Button) if b.cget("text") == text)
 
 
+def in_reading_order(window: tk.Misc, cls: type) -> List[Any]:
+    return sorted(descendants(window, cls), key=lambda w: (w.winfo_rooty(), w.winfo_rootx()))
+
+
+def assert_on_one_line(test: unittest.TestCase, widgets: List[Any]) -> None:
+    """Each widget ends before the next one starts, and a level line crosses them all."""
+    for left, right in zip(widgets, widgets[1:]):
+        test.assertLessEqual(left.winfo_rootx() + left.winfo_width(), right.winfo_rootx())
+    tops = [widget.winfo_rooty() for widget in widgets]
+    bottoms = [widget.winfo_rooty() + widget.winfo_height() for widget in widgets]
+    test.assertLess(max(tops), min(bottoms))
+
+
 @unittest.skipUnless(
     os.environ.get("DISPLAY") or sys.platform in ("win32", "darwin"),
     "A graphical display is required for Tk integration tests",
@@ -102,17 +119,6 @@ class PositionalWindowTests(unittest.TestCase):
         with contextlib.suppress(tk.TclError):
             self.viz.window.destroy()
 
-    def in_reading_order(self, window: tk.Misc, cls: type) -> List[Any]:
-        return sorted(descendants(window, cls), key=lambda w: (w.winfo_rooty(), w.winfo_rootx()))
-
-    def assert_on_one_line(self, widgets: List[Any]) -> None:
-        """Each widget ends before the next one starts, and a level line crosses them all."""
-        for left, right in zip(widgets, widgets[1:]):
-            self.assertLessEqual(left.winfo_rootx() + left.winfo_width(), right.winfo_rootx())
-        tops = [widget.winfo_rooty() for widget in widgets]
-        bottoms = [widget.winfo_rooty() + widget.winfo_height() for widget in widgets]
-        self.assertLess(max(tops), min(bottoms))
-
     def test_positional_item_opens_a_modal_window(self) -> None:
         window = open_positional_window(self.viz)
         self.assertEqual(window.title(), "Positional Strategy")
@@ -122,7 +128,7 @@ class PositionalWindowTests(unittest.TestCase):
     def test_two_rows_hold_the_boxes_of_the_order(self) -> None:
         window = open_positional_window(self.viz)
         boxes = positional_boxes(window)
-        labels = self.in_reading_order(window, tk.Label)
+        labels = in_reading_order(window, tk.Label)
         self.assertEqual(len(boxes), 5)
         self.assertEqual(
             [label.cget("text") for label in labels],
@@ -132,17 +138,17 @@ class PositionalWindowTests(unittest.TestCase):
         # loss and stop price share the next one.
         pairs = [widget for pair in zip(labels, boxes) for widget in pair]
         first_row, second_row = pairs[:6], pairs[6:]
-        self.assert_on_one_line(first_row)
-        self.assert_on_one_line(second_row)
+        assert_on_one_line(self, first_row)
+        assert_on_one_line(self, second_row)
         first_row_bottom = max(widget.winfo_rooty() + widget.winfo_height() for widget in first_row)
         self.assertLessEqual(first_row_bottom, min(widget.winfo_rooty() for widget in second_row))
         # The stop loss is under the ROI, and the stop price under the target price.
         for above, below in zip(first_row[2:], second_row):
             self.assertEqual(above.winfo_rootx(), below.winfo_rootx())
         second_row_bottom = max(widget.winfo_rooty() + widget.winfo_height() for widget in second_row)
-        buttons = self.in_reading_order(window, tk.Button)
+        buttons = in_reading_order(window, tk.Button)
         self.assertEqual([button.cget("text") for button in buttons], ["Test", "Cancel"])
-        self.assert_on_one_line(buttons)
+        assert_on_one_line(self, buttons)
         for button in buttons:
             self.assertGreaterEqual(button.winfo_rooty(), second_row_bottom)
 

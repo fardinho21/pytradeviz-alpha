@@ -7,9 +7,9 @@ import sys
 import tkinter as tk
 import unittest
 from pathlib import Path
-from tkinter import ttk
+from tkinter import font as tkfont, ttk
 from types import SimpleNamespace
-from typing import Any, Callable, List, Set, Tuple
+from typing import Any, Callable, List, Sequence, Set, Tuple
 from unittest import mock
 
 from candle import Candle
@@ -27,7 +27,9 @@ from test_strategies_window import (
     os.environ.get("DISPLAY") or sys.platform in ("win32", "darwin"),
     "A graphical display is required for Tk integration tests",
 )
-class PositionalResultsTests(unittest.TestCase):
+class TradeListTestCase(unittest.TestCase):
+    """The program on the sample prices, and what the tests of a list of trades read from it."""
+
     def setUp(self) -> None:
         self.rows = load_price_rows()
         self.build_app(self.rows)
@@ -44,6 +46,57 @@ class PositionalResultsTests(unittest.TestCase):
         with contextlib.suppress(tk.TclError):
             self.viz.window.destroy()
 
+    def listing(self, tree: ttk.Treeview) -> List[Tuple[str, ...]]:
+        return [tuple(tree.item(item, "values")) for item in tree.get_children()]
+
+    def summary(self, results: tk.Toplevel) -> str:
+        (label,) = descendants(results, tk.Label)
+        return label.cget("text")
+
+    def assert_columns_fit(self, tree: ttk.Treeview, least_widths: Sequence[int]) -> None:
+        """Each column of a list has its least width at least, and room for its longest text."""
+        heading_font, text_font = (
+            tkfont.Font(root=self.viz.window, name=name, exists=True)
+            for name in ("TkHeadingFont", "TkDefaultFont")
+        )
+        listing = self.listing(tree)
+        columns = self.viz.window.tk.splitlist(tree.cget("columns"))
+        self.assertEqual(len(columns), len(least_widths))
+        for number, (column, least) in enumerate(zip(columns, least_widths)):
+            longest = max(
+                [heading_font.measure(tree.heading(column, "text"))]
+                + [text_font.measure(values[number]) for values in listing])
+            width = int(tree.column(column, "width"))
+            self.assertGreaterEqual(width, least, column)
+            # A list draws a text four pixels from each side of its column, and cuts short what
+            # does not fit between them.
+            self.assertGreaterEqual(width, longest + 8, column)
+
+    def body_color(self, index: int) -> str:
+        item = next(i for i in self.viz.canvas.find_withtag(f"candle_{index}")
+                    if self.viz.canvas.type(i) == "rectangle")
+        return self.viz.canvas.itemcget(item, "fill")
+
+    def view_box(self, index: int) -> Tuple[float, float, float, float]:
+        """The bounds of a candle measured from the top left corner of the chart view."""
+        canvas = self.viz.canvas
+        x1, y1, x2, y2 = canvas.bbox(f"candle_{index}")
+        x, y = canvas.canvasx(0), canvas.canvasy(0)
+        return x1 - x, y1 - y, x2 - x, y2 - y
+
+    def assert_shown_within(self, span: Tuple[float, float], index: int) -> None:
+        """A candle is drawn, and lies in a part of the chart view from side to side."""
+        self.assertIsNotNone(self.viz.canvas.bbox(f"candle_{index}"), "the candle is hidden")
+        left, _top, right, _bottom = self.view_box(index)
+        self.assertLessEqual(span[0], left)
+        self.assertLessEqual(right, span[1])
+
+
+@unittest.skipUnless(
+    os.environ.get("DISPLAY") or sys.platform in ("win32", "darwin"),
+    "A graphical display is required for Tk integration tests",
+)
+class PositionalResultsTests(TradeListTestCase):
     def run_order(
         self, window: tk.Toplevel, entry_price: str, roi: str, stop_loss: str,
     ) -> Tuple[tk.Toplevel, ttk.Treeview]:
@@ -61,13 +114,6 @@ class PositionalResultsTests(unittest.TestCase):
         """Test an order from a new Positional window. Return that window, the results window and its list."""
         window = open_positional_window(self.viz)
         return (window, *self.run_order(window, entry_price, roi, stop_loss))
-
-    def listing(self, tree: ttk.Treeview) -> List[Tuple[str, ...]]:
-        return [tuple(tree.item(item, "values")) for item in tree.get_children()]
-
-    def summary(self, results: tk.Toplevel) -> str:
-        (label,) = descendants(results, tk.Label)
-        return label.cget("text")
 
     def expected_listing(self, rows: List[List[Any]], *order: str) -> List[Tuple[str, ...]]:
         """What the list shows for the trades that the strategy module finds for an order."""
@@ -90,18 +136,6 @@ class PositionalResultsTests(unittest.TestCase):
             if index is not None
         }
 
-    def body_color(self, index: int) -> str:
-        item = next(i for i in self.viz.canvas.find_withtag(f"candle_{index}")
-                    if self.viz.canvas.type(i) == "rectangle")
-        return self.viz.canvas.itemcget(item, "fill")
-
-    def view_box(self, index: int) -> Tuple[float, float, float, float]:
-        """The bounds of a candle measured from the top left corner of the chart view."""
-        canvas = self.viz.canvas
-        x1, y1, x2, y2 = canvas.bbox(f"candle_{index}")
-        x, y = canvas.canvasx(0), canvas.canvasy(0)
-        return x1 - x, y1 - y, x2 - x, y2 - y
-
     def view_middle_x(self, *candles: int) -> float:
         """How far across the chart view the middle of some candles is."""
         boxes = [self.view_box(index) for index in candles]
@@ -110,13 +144,6 @@ class PositionalResultsTests(unittest.TestCase):
     def view_y(self, price: float) -> float:
         """How far down the chart view a price is."""
         return self.viz.price_to_y(price) - self.viz.canvas.canvasy(0)
-
-    def assert_shown_within(self, span: Tuple[float, float], index: int) -> None:
-        """A candle is drawn, and lies in a part of the chart view from side to side."""
-        self.assertIsNotNone(self.viz.canvas.bbox(f"candle_{index}"), "the candle is hidden")
-        left, _top, right, _bottom = self.view_box(index)
-        self.assertLessEqual(span[0], left)
-        self.assertLessEqual(right, span[1])
 
     def cover(self, x: int, y: int, width: int, height: int) -> SimpleNamespace:
         """Stand in for a window lying over the chart, placed from the chart's top left corner."""
@@ -446,6 +473,19 @@ class PositionalResultsTests(unittest.TestCase):
         self.assertEqual(self.viz.trade_indices, {1076, 1085})
         self.assertEqual(str(results.grab_current()), str(results))
 
+    def test_columns_are_widened_for_texts_too_long_for_them(self) -> None:
+        window, results, tree = self.open_results("0.5", "10", "5")
+        self.assert_columns_fit(tree, [130] * 4)
+        find_button(results, "Close").invoke()
+        self.viz.window.update()
+        # Prices of many digits need more room than the columns have otherwise.
+        results, tree = self.run_order(window, "0.45678901234567890123", "10", "5")
+        self.assertEqual(
+            self.listing(tree)[0],
+            ("2018-06-24", "0.45678901234567890123", "2018-06-29", "0.4339495617283949561685"),
+        )
+        self.assert_columns_fit(tree, [130] * 4)
+
     def test_closing_the_positional_window_closes_the_results_too(self) -> None:
         plain = self.body_color(1)
         window, results, tree = self.open_results("0.5", "10", "5")
@@ -464,6 +504,8 @@ class PositionalResultsTests(unittest.TestCase):
         # The chart is destroyed before the two windows, which then have no candles to restyle.
         self.viz.window.tk.eval(self.viz.window.protocol("WM_DELETE_WINDOW"))
         self.assertEqual(self.callback_errors, [])
+        # Nor is a call left behind for Tcl to make once the windows are gone.
+        self.assertEqual(self.viz.window.tk.eval("after info"), "")
 
     def test_candles_holding_the_trade_days_are_highlighted_on_another_tab(self) -> None:
         self.viz.select_timeframe("2W")

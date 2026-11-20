@@ -153,8 +153,8 @@ The menu bar has five items:
   recalculates the RSI for every candle on that tab.
   The `Info` box at the top right of the same canvas opens a window that explains RSI, ADX,
   the stochastic oscillator, Williams %R and how they are used together.
-- **Strategies**: a drop-down with *Positional* and *Indicator Based*. *Indicator Based* does
-  nothing yet. *Positional* opens the Positional Strategy window, which backtests one order on
+- **Strategies**: a drop-down with *Positional* and *Indicator Based*, which each open a window
+  that backtests a strategy. *Positional* opens the Positional Strategy window, for one order on
   the loaded candles. Two rows describe the order: *Entry price*, *ROI (%)* and *Target price*,
   then *Stop loss (%)* and *Stop price* under the last two. The entry price, ROI and stop loss
   take numbers only: digits with at most one decimal point, and the ROI may start with `+` or
@@ -181,6 +181,49 @@ The menu bar has five items:
   The first trade is selected when the list opens. Testing drops any candle selection or ROI
   measurement on the chart. Closing the results, with *Close* or from the title bar, clears
   the highlights and empties the boxes of the Positional window for the next order.
+  *Indicator Based* opens the Indicator Based Strategy window, which backtests a strategy made
+  of rules. Each rule is one row: an indicator (*RSI* or *ADX*), its *Period*, a condition
+  (*crosses above*, *crosses below*, *is above* or *is below*) and a level, as in RSI(7)
+  crosses below 30. The rows under *Buy when all of these are true* must all be true on one
+  candle to buy, and any one row under *Sell when any of these is true* sells. The window
+  starts with RSI(7) crosses below 30 to buy on and RSI(7) crosses above 70 to sell on.
+  *Add buy rule* and *Add sell rule* add a row, up to six on each side, and *Remove* takes a
+  row away, though the only buy rule stays. A new row is for an indicator that its side does
+  not use yet. Choosing another indicator in a row fills in the usual rule of that indicator,
+  which for ADX is ADX(14) is below 25 to buy on and ADX(14) crosses above 25 to sell on.
+  *ROI (%)* and *Stop loss (%)*, under *Also sell at (optional)*, give every trade a target
+  price and a stop price, worked out from the price that trade was bought at. Leave them empty
+  to sell on the rules alone. The period boxes take digits only, and the level, ROI and stop
+  loss boxes take digits with at most one decimal point. *Test* needs a period from 2 to 9999
+  and a level from 0 to 100 in every rule, an ROI above 0 and a stop loss above 0 and below
+  100 when they are set, and something to sell on: a sell rule, an ROI or a stop loss. It
+  names the rule or the box to correct otherwise. *Cancel* closes the window and tests nothing.
+  *Test* first loads the rest of the file, which can take a few seconds, so that the whole
+  file is tested on any tab. If part of the file cannot be read, the error is shown and the
+  candles before it are tested. It then walks the daily candles from the first to the last.
+  The rules are read when a candle closes and acted on when the next candle opens, so trades
+  are bought and sold by the rules at opening prices. *is above* and *is below* are true on
+  every candle that closes with the indicator beyond the level. The crossings are true only
+  on the candle that takes it there, from the level or from the other side of it. A rule is
+  never true on the first candles of the file, where its indicator has too few candles behind
+  it. A trade with a target or a stop is also sold by the candle that reaches one of them, at
+  that price, or at the open when the candle opens beyond it. The candle the trade was bought
+  on can do so too. A candle that reaches both is taken to hit the stop first, unless it opens
+  at or above the target. One position is held at a time, and there are no fees and no short
+  sales. A candle that sells does not buy at the same open. Rules that are true on the last
+  candle are not acted on, because no candle follows it.
+  The results open in a second window. The first line gives the number of trades, how many of
+  them made a profit, and the candles and dates tested. The second gives the total return of
+  the trades, where each trade puts in everything the one before it left, beside what buying
+  at the first open and holding to the last close made. The list has the columns of the
+  Positional results and two more: *Return*, what the trade made as a percentage of its entry
+  price, and *Sold by*, which names the first sell rule that was true, *ROI* or *Stop loss*.
+  A position still held on the last candle is listed as *Still open* and valued at the last
+  close. The chart shows the trades as it does for a Positional test: their candles are
+  highlighted on any tab, the first trade is selected, and selecting a trade scrolls the chart
+  to it. Closing the results clears the highlights and keeps the rules in the window for
+  another test. The strategy that was last tested is shown again the next time the window is
+  opened, and *Cancel* drops any changes made since.
 - **Data**: lists the labeled selections with their candle counts. *Export to JSON*
   and *Export to XML* write all selections to `data/labeled_data/selections_YYYYmmdd_HHMMSS.json`
   or `.xml`. *Add To Existing...* opens a file dialog in `data/labeled_data` and

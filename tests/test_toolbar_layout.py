@@ -100,12 +100,14 @@ class ToolbarLayoutTests(unittest.TestCase):
         self.assertEqual([w.title() for w in opened], ["Positional Strategy"])
         self.assertTrue(opened[0].winfo_children(), "Positional window should show its controls")
 
-    def test_indicator_based_item_does_nothing(self) -> None:
+    def test_indicator_based_item_opens_modal_window(self) -> None:
         before = set(self.viz.window.winfo_children())
         self.strategies_menu().invoke(1)
         self.viz.window.update()
-        self.assertEqual(set(self.viz.window.winfo_children()), before)
-        self.assertIsNone(self.viz.window.grab_current())
+        opened = [w for w in self.viz.window.winfo_children()
+                  if isinstance(w, tk.Toplevel) and w not in before]
+        self.assertEqual([w.title() for w in opened], ["Indicator Based Strategy"])
+        self.assertTrue(opened[0].winfo_children(), "Indicator Based window should show its controls")
 
     def test_file_menu_items(self) -> None:
         self.assertEqual(

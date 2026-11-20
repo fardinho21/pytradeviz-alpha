@@ -49,6 +49,11 @@ from strategies import (
     Trade, is_price_text, is_roi_text, is_stop_loss_text, positional_levels, positional_trades,
     price_text, stop_price_text, target_price_text,
 )
+from strategy_rules import (
+    BUY, CONDITIONS, DEFAULT_RULES, INDICATORS, MAX_RULES, SELL, Rule, RuleStrategy, RuleTrade,
+    buy_and_hold_return, compound_return, default_strategy, is_period_text, next_default_rule,
+    percent_text, rule_strategy, rule_trades, trade_returns,
+)
 from timeframes import (
     DAILY, TIMEFRAMES, candle_ids, candle_last_rows, shows_day_labels, timeframe_rows,
 )
@@ -69,6 +74,10 @@ INDICATOR_TITLES: Dict[str, str] = {
 }
 # Tags of everything drawn on the indicator canvas, so a redraw can clear all of it.
 INDICATOR_SERIES_TAGS: Tuple[str, ...] = ("rsi", "adx", "stoch", "willr", "indicator_level")
+# The columns that every list of trades starts with.
+TRADE_COLUMNS: Tuple[str, ...] = ("Entry date", "Entry price", "Sell date", "Sell price")
+# A column of a list of trades keeps this much room on each side of its longest text.
+TRADE_COLUMN_PADDING = 6
 
 
 def format_setting_value(value: float) -> str:
@@ -318,6 +327,8 @@ class PyTradeViz:
         self.trade_indices = set()
         self.labeled_selections = {}
         self.data_source = data_source
+        # The rule based strategy that was tested last. The Indicator Based window opens with it.
+        self.rule_strategy: RuleStrategy = default_strategy()
         # Parameters for each indicator; each timeframe tab keeps its own copy.
         self.indicator_settings: Dict[str, Dict[str, Any]] = default_indicator_settings()
         self.indicators_object = Indicators()
@@ -776,8 +787,9 @@ class PyTradeViz:
         strategies_menu.add_command(
             label="Positional", command=lambda: self.open_positional_window(tk),
         )
-        # Indicator based strategies are not built yet, so this item does nothing.
-        strategies_menu.add_command(label="Indicator Based")
+        strategies_menu.add_command(
+            label="Indicator Based", command=lambda: self.open_indicator_based_window(tk),
+        )
         return strategies_menu
 
     def open_positional_window(self, tk: ModuleType) -> None:
@@ -879,40 +891,272 @@ class PyTradeViz:
         self, tk: ModuleType, parent: Any, trades: List[Trade], reset: Callable[[], None],
     ) -> None:
         """List the trades of a positional test and highlight their candles until the list is closed."""
-        window = self.open_modal_window(tk, "Positional Strategy Results", parent=parent)
-        rows = self._daily_rows
-
-        def date(index: int) -> str:
-            return "-".join(rows[index][0])
-
-        tested = f"{len(rows)} daily candles tested, from {date(0)} to {date(-1)}."
+        tested = self.tested_candles_text()
         if trades:
             summary = f"{len(trades)} trade{'' if len(trades) == 1 else 's'}. {tested}"
             hint = "Select a trade to show it on the chart."
         else:
             summary = f"No trades. {tested}"
             hint = "No candle reached the entry price."
-        tk.Label(window, text=f"{summary}\n{hint}", justify="left", anchor="w").pack(
+        self.open_trade_list_window(
+            tk, parent, "Positional Strategy Results", f"{summary}\n{hint}",
+            [(heading, 130) for heading in TRADE_COLUMNS], trades,
+            [self.trade_listing(trade) for trade in trades], closed=reset,
+        )
+
+    def open_indicator_based_window(self, tk: ModuleType) -> None:
+        window = self.open_modal_window(tk, "Indicator Based Strategy")
+        self.build_indicator_based_content(tk, window)
+
+    def build_indicator_based_content(self, tk: ModuleType, window: Any) -> None:
+        strategy = self.rule_strategy
+        # A period box takes digits only. The level, ROI and stop loss boxes refuse any edit that
+        # would leave something other than a number.
+        period_check = (window.register(is_period_text), "%P")
+        number_check = (window.register(is_price_text), "%P")
+        read_buy_rows = self.build_rule_group(
+            tk, window, BUY, "Buy when all of these are true", strategy.buy_rules,
+            period_check, number_check)
+        read_sell_rows = self.build_rule_group(
+            tk, window, SELL, "Sell when any of these is true", strategy.sell_rules,
+            period_check, number_check)
+
+        # Both are measured from the price that each trade was bought at. Either can be left empty.
+        exits = tk.LabelFrame(window, text="Also sell at (optional)", padx=10, pady=6)
+        exits.pack(fill="x", padx=12, pady=(12, 0))
+        tk.Label(exits, text="ROI (%)").pack(side="left")
+        roi_box = tk.Entry(exits, width=8, validate="key", validatecommand=number_check)
+        roi_box.pack(side="left", padx=(6, 16))
+        tk.Label(exits, text="Stop loss (%)").pack(side="left")
+        stop_loss_box = tk.Entry(exits, width=8, validate="key", validatecommand=number_check)
+        stop_loss_box.pack(side="left", padx=(6, 0))
+        for box, percent in ((roi_box, strategy.roi_percent), (stop_loss_box, strategy.stop_loss_percent)):
+            if percent is not None:
+                box.insert(0, price_text(percent))
+
+        testing = False
+
+        def test() -> None:
+            # Showing the results runs the event loop until their window appears, and a second
+            # click on Test in that time must not start another test.
+            nonlocal testing
+            if testing:
+                return
+            testing = True
+            try:
+                self.run_indicator_based_test(
+                    tk, window, read_buy_rows(), read_sell_rows(), roi_box.get(), stop_loss_box.get())
+            finally:
+                testing = False
+
+        buttons = tk.Frame(window)
+        buttons.pack(fill="x", padx=12, pady=12)
+        tk.Button(buttons, text="Test", width=8, command=test).pack(side="left")
+        tk.Button(buttons, text="Cancel", width=8, command=window.destroy).pack(side="left", padx=(8, 0))
+
+    def build_rule_group(
+        self, tk: ModuleType, window: Any, side: str, title: str, rules: Sequence[Rule],
+        period_check: Tuple[str, str], number_check: Tuple[str, str],
+    ) -> Callable[[], List[Tuple[str, str, str, str]]]:
+        """Build the rows of the buy rules or of the sell rules of a strategy, one rule to a row.
+
+        Rows can be added until there are ``MAX_RULES`` of them, and removed, though a buy rule
+        that is the only one stays. The call that is returned reads the rows: the indicator,
+        the period text, the condition and the level text of each.
+        """
+        group = tk.LabelFrame(window, text=title, padx=10, pady=6)
+        group.pack(fill="x", padx=12, pady=(12, 0))
+        # The frame of each row, its Remove button and the call that reads it.
+        rows: List[Tuple[Any, Any, Callable[[], Tuple[str, str, str, str]]]] = []
+
+        def update_buttons() -> None:
+            # A strategy needs a buy rule, so the only one left cannot be removed.
+            removable = side == SELL or len(rows) > 1
+            for _, remove_button, _ in rows:
+                remove_button.configure(state="normal" if removable else "disabled")
+            add_button.configure(state="normal" if len(rows) < MAX_RULES else "disabled")
+
+        def remove_row(frame: Any) -> None:
+            rows[:] = [row for row in rows if row[0] is not frame]
+            frame.destroy()
+            update_buttons()
+
+        def add_row(rule: Rule) -> Any:
+            """Add a row that holds ``rule``, and return its period box."""
+            frame = tk.Frame(group)
+            # The button that adds a row stays under the rows.
+            frame.pack(fill="x", pady=2, before=add_button)
+            # A drop-down selects its text when a choice is made. The selection is kept from
+            # other programs, where it would replace what is selected there, and it is cleared
+            # after the choice.
+            indicator_box = ttk.Combobox(
+                frame, values=INDICATORS, state="readonly", width=5, exportselection=False)
+            indicator_box.pack(side="left")
+            tk.Label(frame, text="Period").pack(side="left", padx=(10, 0))
+            period_box = tk.Entry(frame, width=5, validate="key", validatecommand=period_check)
+            period_box.pack(side="left", padx=(6, 10))
+            condition_box = ttk.Combobox(
+                frame, values=CONDITIONS, state="readonly", width=13, exportselection=False)
+            condition_box.pack(side="left")
+            level_box = tk.Entry(frame, width=7, validate="key", validatecommand=number_check)
+            level_box.pack(side="left", padx=(6, 10))
+            remove_button = tk.Button(frame, text="Remove", command=lambda: remove_row(frame))
+            remove_button.pack(side="left")
+            # The indicator that the period, condition and level of the row were last set for.
+            shown = rule.indicator
+
+            def fill(values: Rule) -> None:
+                indicator_box.set(values.indicator)
+                condition_box.set(values.condition)
+                for box, text in ((period_box, str(values.period)), (level_box, price_text(values.level))):
+                    box.delete(0, "end")
+                    box.insert(0, text)
+
+            def indicator_chosen(_event: Any) -> None:
+                # Another indicator brings its own period, condition and level. Choosing the one
+                # that the row already has keeps what was typed for it.
+                nonlocal shown
+                indicator_box.selection_clear()
+                if indicator_box.get() != shown:
+                    shown = indicator_box.get()
+                    fill(DEFAULT_RULES[side, shown])
+
+            indicator_box.bind("<<ComboboxSelected>>", indicator_chosen)
+            condition_box.bind("<<ComboboxSelected>>", lambda _event: condition_box.selection_clear())
+            fill(rule)
+            rows.append((frame, remove_button, lambda: (
+                indicator_box.get(), period_box.get(), condition_box.get(), level_box.get())))
+            update_buttons()
+            return period_box
+
+        def add_default_row() -> None:
+            # The new row is for an indicator that the side does not use yet, when there is one.
+            used = [read()[0] for _, _, read in rows]
+            add_row(next_default_rule(side, used)).focus_set()
+
+        add_button = tk.Button(group, text=f"Add {side} rule", command=add_default_row)
+        add_button.pack(anchor="w", pady=(4, 0))
+        for number, rule in enumerate(rules):
+            period_box = add_row(rule)
+            # Typing starts in the period of the first buy rule.
+            if side == BUY and number == 0:
+                period_box.focus_set()
+        return lambda: [read() for _, _, read in rows]
+
+    def run_indicator_based_test(
+        self, tk: ModuleType, window: Any, buy_rows: Sequence[Sequence[str]],
+        sell_rows: Sequence[Sequence[str]], roi_text: str, stop_loss_text: str,
+    ) -> None:
+        """Test the rules typed in the Indicator Based window on the daily candles, then list the trades.
+
+        The whole file is tested, so the part of it that is not on the chart yet is loaded first.
+        The rules are kept for the next time the window is opened.
+        """
+        if not self._daily_rows:
+            messagebox.showerror("Unable to test", "No price data is loaded.", parent=window)
+            return
+        try:
+            strategy = rule_strategy(buy_rows, sell_rows, roi_text, stop_loss_text)
+        except ValueError as error:
+            messagebox.showerror("Invalid setting", str(error), parent=window)
+            return
+        self.rule_strategy = strategy
+        # Candles that cannot be loaded are named in an error, and the ones before them are tested.
+        self.load_pages(pages=None, parent=window)
+        # A long file takes a few seconds to load. A click on Cancel in that time is handled
+        # only now, and it leaves no window to list the trades in.
+        try:
+            window.update()
+            if not window.winfo_exists():
+                return
+        except tk.TclError:
+            # The whole program was closed instead, and Tk no longer answers for its windows.
+            return
+        self.open_indicator_based_results_window(tk, window, rule_trades(self._daily_rows, strategy))
+
+    def open_indicator_based_results_window(
+        self, tk: ModuleType, parent: Any, trades: List[RuleTrade],
+    ) -> None:
+        """List the trades of a rule based test with what each one made, beside buying and holding.
+
+        The typed rules stay in the Indicator Based window when the list is closed.
+        """
+        rows = self._daily_rows
+        returns = trade_returns(rows, trades)
+        tested = self.tested_candles_text()
+        hold = buy_and_hold_return(rows)
+        hold_text = "" if hold is None else f"Buy and hold: {percent_text(hold)}."
+        if trades:
+            profitable = sum(1 for made in returns if made > 0)
+            total = f"Total return: {percent_text(compound_return(returns))}."
+            if trades[-1].sell_index is None:
+                hold_text = f"{hold_text} The open trade is valued at the last close.".lstrip()
+            lines = [
+                f"{len(trades)} trade{'' if len(trades) == 1 else 's'}, {profitable} profitable. {tested}",
+                f"{total} {hold_text}".rstrip(),
+                "Select a trade to show it on the chart.",
+            ]
+        else:
+            lines = [f"No trades. {tested}", hold_text, "No candle before the last met every buy rule."]
+        self.open_trade_list_window(
+            tk, parent, "Indicator Based Strategy Results", "\n".join(line for line in lines if line),
+            list(zip(TRADE_COLUMNS + ("Return", "Sold by"), (105, 115, 105, 115, 90, 240))), trades,
+            [
+                self.trade_listing(trade) + (percent_text(made), trade.sold_by or "")
+                for trade, made in zip(trades, returns)
+            ],
+        )
+
+    def tested_candles_text(self) -> str:
+        """How many daily candles a test covered, with the dates of the first and the last."""
+        rows = self._daily_rows
+        first, last = ("-".join(rows[index][0]) for index in (0, -1))
+        return f"{len(rows)} daily candles tested, from {first} to {last}."
+
+    def trade_listing(self, trade: Trade) -> Tuple[str, str, str, str]:
+        """The dates and prices that a trade was bought and sold at, as a list of trades shows them."""
+        rows = self._daily_rows
+        sold = trade.sell_index is not None
+        return (
+            "-".join(rows[trade.buy_index][0]), price_text(trade.buy_price),
+            "-".join(rows[trade.sell_index][0]) if sold else "Still open",
+            price_text(trade.sell_price) if sold else "",
+        )
+
+    def open_trade_list_window(
+        self, tk: ModuleType, parent: Any, title: str, summary: str,
+        columns: Sequence[Tuple[str, int]], trades: Sequence[Trade], listing: Sequence[Sequence[str]],
+        closed: Optional[Callable[[], None]] = None,
+    ) -> None:
+        """List the trades of a test and highlight their candles until the list is closed.
+
+        ``columns`` are the headings of the list with the least width of each, and ``listing``
+        holds the text of each trade under them. ``closed`` is called when the list is closed.
+        """
+        window = self.open_modal_window(tk, title, parent=parent)
+        tk.Label(window, text=summary, justify="left", anchor="w").pack(
             fill="x", padx=12, pady=(12, 0))
 
-        listing = tk.Frame(window)
-        listing.pack(fill="both", expand=True, padx=12, pady=(8, 0))
-        columns = ("Entry date", "Entry price", "Sell date", "Sell price")
-        tree = ttk.Treeview(listing, columns=columns, show="headings", height=12, selectmode="browse")
-        for column in columns:
-            tree.heading(column, text=column, anchor="w")
-            tree.column(column, width=130, anchor="w")
-        scrollbar = tk.Scrollbar(listing, command=tree.yview)
+        frame = tk.Frame(window)
+        frame.pack(fill="both", expand=True, padx=12, pady=(8, 0))
+        headings = [heading for heading, _ in columns]
+        tree = ttk.Treeview(frame, columns=headings, show="headings", height=12, selectmode="browse")
+        # A column is widened to hold its longest text, which the list would cut short otherwise.
+        heading_font, cell_font = (
+            tkfont.Font(root=self.window, name=name, exists=True)
+            for name in ("TkHeadingFont", "TkDefaultFont")
+        )
+        for number, (heading, width) in enumerate(columns):
+            texts = {values[number] for values in listing}
+            widest = max([heading_font.measure(heading)] + [cell_font.measure(text) for text in texts])
+            tree.heading(heading, text=heading, anchor="w")
+            tree.column(heading, width=max(width, widest + 2 * TRADE_COLUMN_PADDING), anchor="w")
+        scrollbar = tk.Scrollbar(frame, command=tree.yview)
         tree.configure(yscrollcommand=scrollbar.set)
         scrollbar.pack(side="right", fill="y")
         tree.pack(side="left", fill="both", expand=True)
-        for number, trade in enumerate(trades):
-            sold = trade.sell_index is not None
-            tree.insert("", "end", iid=str(number), values=(
-                date(trade.buy_index), price_text(trade.buy_price),
-                date(trade.sell_index) if sold else "Still open",
-                price_text(trade.sell_price) if sold else "",
-            ))
+        for number, values in enumerate(listing):
+            tree.insert("", "end", iid=str(number), values=tuple(values))
         tk.Button(window, text="Close", width=8, command=window.destroy).pack(pady=12)
 
         # The candles of the active tab that hold the days each trade was bought and sold on.
@@ -934,7 +1178,8 @@ class PyTradeViz:
             # The chart is gone before this window when the whole program is closing.
             if self.canvas.winfo_exists():
                 self.set_trade_highlights(set())
-            reset()
+            if closed is not None:
+                closed()
             self.return_grab(event, window, parent)
 
         tree.bind("<<TreeviewSelect>>", show_selected)
@@ -1557,7 +1802,13 @@ class PyTradeViz:
     def return_grab(self, event: Any, help_window: Any, parent: Any) -> None:
         if event.widget is not help_window:
             return
-        parent.after_idle(lambda: parent.grab_set() if parent.winfo_exists() else None)
+        # The chart is gone before this window when the whole program is closing, and then no
+        # window is left to take the grab.
+        if not self.canvas.winfo_exists():
+            return
+        # The call belongs to the main window, so that it can still be made when the parent is
+        # closed together with this window.
+        self.window.after_idle(lambda: parent.grab_set() if parent.winfo_exists() else None)
 
     def open_modal_window(self, tk: ModuleType, title: str, parent: Any = None) -> Any:
         # Selecting a menu item already unposts the menus; this opens the modal dialog.
@@ -2177,8 +2428,11 @@ class PyTradeViz:
         """Load every remaining window and show the newest candles."""
         self.load_pages(pages=None, to_end=True)
 
-    def load_pages(self, pages: Optional[int], to_end: bool = False) -> None:
-        """Load the next ``pages`` windows, or all remaining windows when pages is None."""
+    def load_pages(self, pages: Optional[int], to_end: bool = False, parent: Any = None) -> None:
+        """Load the next ``pages`` windows, or all remaining windows when pages is None.
+
+        An error is shown over ``parent``, which is the main window when none is given.
+        """
         if self.data_source is None or not self.data_source.has_more:
             return
 
@@ -2204,7 +2458,8 @@ class PyTradeViz:
         else:
             self.update_load_more_button()
         if error is not None:
-            messagebox.showerror("Unable to load price data", str(error), parent=self.window)
+            messagebox.showerror(
+                "Unable to load price data", str(error), parent=self.window if parent is None else parent)
 
     def append_loaded_rows(self, new_rows: List[List[Any]], to_end: bool = False) -> None:
         if self.active_timeframe != DAILY:
