@@ -46,6 +46,15 @@ class TradeListTestCase(unittest.TestCase):
         with contextlib.suppress(tk.TclError):
             self.viz.window.destroy()
 
+    def build_paginated_app(self) -> PaginatedPriceData:
+        """Start the program again on the sample file, read a page at a time as an opened file is."""
+        self.viz.window.destroy()
+        data_file = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc_no_vol.csv"
+        source = PaginatedPriceData(data_file)
+        self.build_app(source.load_initial(), source)
+        self.assertEqual(len(self.viz.price_data), 365)
+        return source
+
     def listing(self, tree: ttk.Treeview) -> List[Tuple[str, ...]]:
         return [tuple(tree.item(item, "values")) for item in tree.get_children()]
 
@@ -210,7 +219,8 @@ class PositionalResultsTests(TradeListTestCase):
             "30 trades. 1392 daily candles tested, from 2018-05-04 to 2022-02-23.\n"
             "Select a trade to show it on the chart.",
         )
-        self.assertEqual([button.cget("text") for button in descendants(results, tk.Button)], ["Close"])
+        self.assertEqual(
+            [button.cget("text") for button in descendants(results, tk.Button)], ["Minimize", "Close"])
 
     def test_one_trade_is_counted_as_one_trade(self) -> None:
         window, results, tree = self.open_results("1.9", "100", "50")
@@ -559,11 +569,7 @@ class PositionalResultsTests(TradeListTestCase):
 
     def test_only_the_loaded_candles_are_tested(self) -> None:
         # A data file is read a page at a time, and the pages still to come are not tested.
-        self.viz.window.destroy()
-        data_file = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc_no_vol.csv"
-        source = PaginatedPriceData(data_file)
-        self.build_app(source.load_initial(), source)
-        self.assertEqual(len(self.viz.price_data), 365)
+        self.build_paginated_app()
         window, results, tree = self.open_results("0.5", "10", "5")
         self.assertEqual(
             self.summary(results).splitlines()[0],

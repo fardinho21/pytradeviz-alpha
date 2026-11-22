@@ -7,7 +7,7 @@ import sys
 import tkinter as tk
 import unittest
 from tkinter import ttk
-from typing import Any, Callable, List, NamedTuple, Sequence, Tuple
+from typing import Any, Callable, List, NamedTuple, Sequence, Tuple, Union
 from unittest import mock
 
 from cursors import POINTING_HAND
@@ -18,24 +18,39 @@ from test_strategies_window import (
     assert_on_one_line, collect_callback_errors, descendants, find_button, in_reading_order,
     opened_windows, strategies_menu, type_text,
 )
-from test_strategy_rules import BUY_ROW, SELL_ROW
+from test_strategy_rules import BAND_BUY_ROW, BAND_SELL_ROW, BUY_ROW, SELL_ROW
 
 
 # The rule that a row added for ADX holds on each side.
-ADX_BUY_ROW = ("ADX", "14", "is below", "25")
-ADX_SELL_ROW = ("ADX", "14", "crosses above", "25")
+ADX_BUY_ROW = ("ADX", "14", "is below", "25", "1")
+ADX_SELL_ROW = ("ADX", "14", "crosses above", "25", "1")
 
 GROUP_TITLES = {BUY: "Buy when all of these are true", SELL: "Sell when any of these is true"}
 EXITS_TITLE = "Also sell at (optional)"
 
 
 class RuleRow(NamedTuple):
-    """The drop-downs, boxes and button of one rule in the Indicator Based window."""
+    """The drop-downs, boxes and button of one RSI or ADX rule in the Indicator Based window."""
     indicator: ttk.Combobox
     period: tk.Entry
     condition: ttk.Combobox
     level: tk.Entry
+    candles: tk.Entry
     remove: tk.Button
+
+
+class BandRow(NamedTuple):
+    """The drop-downs, boxes and button of one Bollinger rule in the Indicator Based window."""
+    indicator: ttk.Combobox
+    period: tk.Entry
+    multiplier: tk.Entry
+    condition: ttk.Combobox
+    band: ttk.Combobox
+    candles: tk.Entry
+    remove: tk.Button
+
+
+AnyRow = Union[RuleRow, BandRow]
 
 
 def open_indicator_based_window(viz: PyTradeViz) -> tk.Toplevel:
@@ -51,22 +66,27 @@ def group_frame(window: tk.Misc, title: str) -> tk.LabelFrame:
     return next(group for group in descendants(window, tk.LabelFrame) if group.cget("text") == title)
 
 
-def rule_rows(window: tk.Misc, side: str) -> List[RuleRow]:
+def row_in(line: tk.Misc) -> AnyRow:
+    """The row that one line of a group shows: its parts from left to right, without the labels."""
+    parts = [part for part in line.pack_slaves() if not isinstance(part, tk.Label)]
+    # A Bollinger row has a multiplier and a band, where another row has a level alone.
+    return BandRow(*parts) if len(parts) == len(BandRow._fields) else RuleRow(*parts)
+
+
+def rule_rows(window: tk.Misc, side: str) -> List[AnyRow]:
     """The rows of the buy rules or of the sell rules, from the top one down."""
-    rows = []
-    for frame in group_frame(window, GROUP_TITLES[side]).pack_slaves():
-        if isinstance(frame, tk.Frame):
-            indicator, _label, period, condition, level, remove = frame.pack_slaves()
-            rows.append(RuleRow(indicator, period, condition, level, remove))
-    return rows
+    lines = group_frame(window, GROUP_TITLES[side]).pack_slaves()
+    return [row_in(line) for line in lines if isinstance(line, tk.Frame)]
 
 
-def shown_rules(window: tk.Misc, side: str) -> List[Tuple[str, str, str, str]]:
-    """The indicator, period, condition and level that each row of one side shows."""
-    return [
-        (row.indicator.get(), row.period.get(), row.condition.get(), row.level.get())
-        for row in rule_rows(window, side)
-    ]
+def shown_rules(window: tk.Misc, side: str) -> List[Tuple[str, ...]]:
+    """What each row of one side shows, from left to right.
+
+    That is the indicator, the period, the condition and the level. For a Bollinger row it is
+    the indicator, the period, the multiplier, the condition and the band. Both end with how
+    many candles in a row the rule asks for.
+    """
+    return [tuple(part.get() for part in row[:-1]) for row in rule_rows(window, side)]
 
 
 def exit_boxes(window: tk.Misc) -> List[tk.Entry]:
@@ -92,12 +112,19 @@ def retype(box: tk.Entry, text: str) -> None:
     type_text(box, text)
 
 
-def set_rule(row: RuleRow, indicator: str, period: str, condition: str, level: str) -> None:
-    # The indicator is chosen first, because another indicator brings its own period and level.
+def set_rule(row: AnyRow, indicator: str, *texts: str) -> None:
+    """Make a row hold a rule, which is given as the row shows it from left to right."""
+    # The indicator is chosen first, because another indicator brings its own row.
     choose(row.indicator, indicator)
-    retype(row.period, period)
-    choose(row.condition, condition)
-    retype(row.level, level)
+    parts = row_in(row.indicator.master)[1:-1]
+    if len(parts) != len(texts):
+        raise ValueError(f"A row of {indicator} has {len(parts)} parts after the indicator: {texts}")
+    for part, text in zip(parts, texts):
+        # A choice is made in a drop-down, and a box is typed in.
+        if isinstance(part, ttk.Combobox):
+            choose(part, text)
+        else:
+            retype(part, text)
 
 
 def type_strategy(
@@ -150,7 +177,9 @@ class IndicatorBasedWindowTests(unittest.TestCase):
         (buy_row,) = rule_rows(window, BUY)
         self.assertIs(window.focus_lastfor(), buy_row.period)
         boxes = descendants(window, tk.Entry)
-        self.assertEqual(len(boxes), 10)
+        # Two rows of two drop-downs and three boxes, the ROI and the stop loss. A row also has
+        # the parts of a Bollinger rule, which it does not show.
+        self.assertEqual(len([box for box in boxes if box.winfo_ismapped()]), 12)
         for box in boxes:
             self.assertFalse(box.selection_present(), box)
 
@@ -170,10 +199,13 @@ class IndicatorBasedWindowTests(unittest.TestCase):
             self.assertEqual(len(rows), count)
             lines = [row.indicator.master for row in rows]
             for row, line in zip(rows, lines):
-                # A drop-down, the period with its label, a drop-down, the level and the button.
-                indicator, label, period, condition, level, remove = line.pack_slaves()
-                self.assertEqual(row, (indicator, period, condition, level, remove))
+                # A drop-down, the period with its label, a drop-down, the level, the candles
+                # between the words that they are read with, and the button.
+                (indicator, label, period, condition, level, for_label, candles, candles_label,
+                 remove) = line.pack_slaves()
+                self.assertEqual(row, (indicator, period, condition, level, candles, remove))
                 self.assertEqual(label.cget("text"), "Period")
+                self.assertEqual((for_label.cget("text"), candles_label.cget("text")), ("for", "candles"))
                 self.assertEqual(remove.cget("text"), "Remove")
                 assert_on_one_line(self, line.pack_slaves())
             # The rows lie one under another with their parts lined up, above the button that adds one.
@@ -201,17 +233,84 @@ class IndicatorBasedWindowTests(unittest.TestCase):
             self.assertLessEqual(
                 button.winfo_rooty() + button.winfo_height(), window.winfo_rooty() + window.winfo_height())
 
+    def test_bollinger_rule_is_one_line_that_says_what_the_close_does(self) -> None:
+        window = open_indicator_based_window(self.viz)
+        find_button(window, "Add buy rule").invoke()
+        choose(rule_rows(window, BUY)[1].indicator, "Bollinger")
+        window.update()
+        above, row = rule_rows(window, BUY)
+        line = row.indicator.master
+        # A drop-down, the period and the multiplier with their labels, and then the close with
+        # a drop-down for what it does and one for the band, and for how many candles.
+        (indicator, period_label, period, multiplier_label, multiplier, close_label, condition, band,
+         for_label, candles, candles_label, remove) = line.pack_slaves()
+        self.assertEqual(row, (indicator, period, multiplier, condition, band, candles, remove))
+        labels = (period_label, multiplier_label, close_label, for_label, candles_label)
+        self.assertEqual(
+            [label.cget("text") for label in labels], ["Period", "Std. dev.", "Close", "for", "candles"])
+        self.assertEqual(remove.cget("text"), "Remove")
+        assert_on_one_line(self, line.pack_slaves())
+        # It starts as the RSI row above it does, and all of it is inside its group.
+        self.assertLessEqual(above.remove.winfo_rooty() + above.remove.winfo_height(), line.winfo_rooty())
+        self.assertEqual(
+            [part.winfo_rootx() for part in row[:2]], [part.winfo_rootx() for part in above[:2]])
+        group = group_frame(window, GROUP_TITLES[BUY])
+        self.assertLessEqual(
+            remove.winfo_rootx() + remove.winfo_width(), group.winfo_rootx() + group.winfo_width())
+        self.assertLessEqual(
+            group.winfo_rootx() + group.winfo_width(), window.winfo_rootx() + window.winfo_width())
+
+    def test_tab_goes_through_a_row_from_left_to_right(self) -> None:
+        window = open_indicator_based_window(self.viz)
+        # The candles are the last stop before the button, after the level or after the band.
+        for indicator in ("RSI", "Bollinger"):
+            with self.subTest(indicator):
+                choose(rule_rows(window, SELL)[0].indicator, indicator)
+                window.update()
+                (row,) = rule_rows(window, SELL)
+                order = [row.indicator]
+                while len(order) < len(row):
+                    order.append(order[-1].tk_focusNext())
+                self.assertEqual(order, list(row))
+
     def test_drop_downs_hold_the_indicators_and_the_conditions(self) -> None:
         window = open_indicator_based_window(self.viz)
         conditions = ("crosses above", "crosses below", "is above", "is below")
         for side in (BUY, SELL):
             (row,) = rule_rows(window, side)
-            for box, values in ((row.indicator, ("RSI", "ADX")), (row.condition, conditions)):
+            for box, values in ((row.indicator, ("RSI", "ADX", "Bollinger")), (row.condition, conditions)):
                 self.assertEqual(box.tk.splitlist(box.cget("values")), values)
                 # A choice is made from the list, and nothing can be typed.
                 self.assertEqual(str(box.cget("state")), "readonly")
                 # The text of a choice is not offered to other programs as the selection.
                 self.assertFalse(box.tk.getboolean(box.cget("exportselection")))
+
+    def test_drop_downs_of_a_bollinger_row_hold_the_conditions_and_the_bands(self) -> None:
+        window = open_indicator_based_window(self.viz)
+        conditions = ("crosses above", "crosses below", "is above", "is below")
+        for side in (BUY, SELL):
+            choose(rule_rows(window, side)[0].indicator, "Bollinger")
+            (row,) = rule_rows(window, side)
+            for box, values in ((row.condition, conditions), (row.band, ("upper band", "lower band"))):
+                self.assertEqual(box.tk.splitlist(box.cget("values")), values)
+                self.assertEqual(str(box.cget("state")), "readonly")
+                self.assertFalse(box.tk.getboolean(box.cget("exportselection")))
+
+    def test_drop_downs_show_each_of_their_choices_in_full(self) -> None:
+        window = open_indicator_based_window(self.viz)
+
+        def assert_choices_shown_in_full(box: ttk.Combobox) -> None:
+            for value in box.tk.splitlist(box.cget("values")):
+                choose(box, value)
+                window.update()
+                # A drop-down that is too narrow for its text shows only a part of it.
+                self.assertEqual(box.xview(), (0.0, 1.0), value)
+
+        # Bollinger is the last of the indicators, and its row has the three drop-downs.
+        assert_choices_shown_in_full(rule_rows(window, BUY)[0].indicator)
+        (row,) = rule_rows(window, BUY)
+        assert_choices_shown_in_full(row.condition)
+        assert_choices_shown_in_full(row.band)
 
     def test_period_box_takes_whole_numbers_only(self) -> None:
         window = open_indicator_based_window(self.viz)
@@ -232,10 +331,36 @@ class IndicatorBasedWindowTests(unittest.TestCase):
         type_text(period, "0")
         self.assertEqual(period.get(), "1230")
 
-    def test_level_roi_and_stop_loss_boxes_take_numbers_only_and_no_sign(self) -> None:
+    def test_candles_box_takes_whole_numbers_only(self) -> None:
+        window = open_indicator_based_window(self.viz)
+        # A Bollinger row has the box that every other row has.
+        choose(rule_rows(window, SELL)[0].indicator, "Bollinger")
+        for side in (BUY, SELL):
+            with self.subTest(side):
+                candles = rule_rows(window, side)[0].candles
+                # A rule is for one candle until more are asked for.
+                self.assertEqual(candles.get(), "1")
+                candles.delete(0, "end")
+                for text in ("a", "-", "+", ".", " ", "e", "1.5", "1e3", "12abc", "１"):
+                    candles.insert("end", text)
+                    self.assertEqual(candles.get(), "", repr(text))
+                type_text(candles, "1234")
+                self.assertEqual(candles.get(), "1234")
+                # A fifth digit is refused, and so is a letter put in the middle.
+                candles.insert("end", "5")
+                candles.insert(1, "x")
+                self.assertEqual(candles.get(), "1234")
+                self.assertEqual(candles.cget("validate"), "key")
+                candles.delete(3)
+                type_text(candles, "0")
+                self.assertEqual(candles.get(), "1230")
+
+    def test_level_multiplier_roi_and_stop_loss_boxes_take_numbers_only_and_no_sign(self) -> None:
         window = open_indicator_based_window(self.viz)
         level = rule_rows(window, SELL)[0].level
-        for box in (level, *exit_boxes(window)):
+        choose(rule_rows(window, BUY)[0].indicator, "Bollinger")
+        multiplier = rule_rows(window, BUY)[0].multiplier
+        for box in (level, multiplier, *exit_boxes(window)):
             box.delete(0, "end")
             for text in ("a", "-", "+", " ", "e", "%", "-5", "+5", "1e5", "５"):
                 box.insert("end", text)
@@ -257,15 +382,27 @@ class IndicatorBasedWindowTests(unittest.TestCase):
         add_sell.invoke()
         self.assertEqual(shown_rules(window, BUY), [BUY_ROW, ADX_BUY_ROW])
         self.assertEqual(shown_rules(window, SELL), [SELL_ROW, ADX_SELL_ROW])
-        # A side that uses both indicators gets another RSI rule.
         add_buy.invoke()
-        self.assertEqual(shown_rules(window, BUY), [BUY_ROW, ADX_BUY_ROW, BUY_ROW])
+        add_sell.invoke()
+        self.assertEqual(shown_rules(window, BUY), [BUY_ROW, ADX_BUY_ROW, BAND_BUY_ROW])
+        self.assertEqual(shown_rules(window, SELL), [SELL_ROW, ADX_SELL_ROW, BAND_SELL_ROW])
+        # A side that uses every indicator gets another RSI rule.
+        add_buy.invoke()
+        self.assertEqual(shown_rules(window, BUY), [BUY_ROW, ADX_BUY_ROW, BAND_BUY_ROW, BUY_ROW])
 
     def test_added_row_is_for_rsi_when_the_side_uses_only_adx(self) -> None:
         window = open_indicator_based_window(self.viz)
         choose(rule_rows(window, SELL)[0].indicator, "ADX")
         find_button(window, "Add sell rule").invoke()
         self.assertEqual(shown_rules(window, SELL), [ADX_SELL_ROW, SELL_ROW])
+
+    def test_added_rows_are_for_rsi_and_adx_when_the_side_uses_only_bollinger(self) -> None:
+        window = open_indicator_based_window(self.viz)
+        choose(rule_rows(window, BUY)[0].indicator, "Bollinger")
+        add_button = find_button(window, "Add buy rule")
+        add_button.invoke()
+        add_button.invoke()
+        self.assertEqual(shown_rules(window, BUY), [BAND_BUY_ROW, BUY_ROW, ADX_BUY_ROW])
 
     def test_period_of_an_added_row_is_ready_for_typing(self) -> None:
         window = open_indicator_based_window(self.viz)
@@ -319,16 +456,19 @@ class IndicatorBasedWindowTests(unittest.TestCase):
     def test_removing_a_row_leaves_the_others_as_typed(self) -> None:
         window = open_indicator_based_window(self.viz)
         add_button = find_button(window, "Add buy rule")
-        add_button.invoke()
-        add_button.invoke()
+        for _ in range(3):
+            add_button.invoke()
         rows = rule_rows(window, BUY)
-        set_rule(rows[0], "RSI", "9", "is below", "35")
-        set_rule(rows[2], "ADX", "20", "is above", "40.5")
+        typed = [
+            ("RSI", "9", "is below", "35", "2"), ("Bollinger", "30", "2.5", "is above", "upper band", "3"),
+            ("ADX", "20", "is above", "40.5", "4"),
+        ]
+        for row, rule in zip((rows[0], rows[2], rows[3]), typed):
+            set_rule(row, *rule)
         rows[1].remove.invoke()
         window.update()
         self.assertFalse(rows[1].period.winfo_exists())
-        self.assertEqual(
-            shown_rules(window, BUY), [("RSI", "9", "is below", "35"), ("ADX", "20", "is above", "40.5")])
+        self.assertEqual(shown_rules(window, BUY), typed)
         self.assertEqual(shown_rules(window, SELL), [SELL_ROW])
 
     def test_window_grows_and_shrinks_with_its_rows(self) -> None:
@@ -345,10 +485,26 @@ class IndicatorBasedWindowTests(unittest.TestCase):
         window.update()
         self.assertEqual(window.winfo_height(), height)
 
+    def test_window_widens_for_a_bollinger_row_and_narrows_again_without_it(self) -> None:
+        window = open_indicator_based_window(self.viz)
+        size = (window.winfo_width(), window.winfo_height())
+        choose(rule_rows(window, SELL)[0].indicator, "Bollinger")
+        window.update()
+        self.assertGreater(window.winfo_width(), size[0])
+        self.assertEqual(window.winfo_height(), size[1])
+        # The button at the end of the row is still inside the window.
+        (row,) = rule_rows(window, SELL)
+        self.assertLessEqual(
+            row.remove.winfo_rootx() + row.remove.winfo_width(), window.winfo_rootx() + window.winfo_width())
+        choose(row.indicator, "ADX")
+        window.update()
+        self.assertEqual((window.winfo_width(), window.winfo_height()), size)
+
     def test_choosing_another_indicator_brings_its_usual_rule(self) -> None:
         window = open_indicator_based_window(self.viz)
         (buy,), (sell,) = rule_rows(window, BUY), rule_rows(window, SELL)
-        set_rule(buy, "RSI", "9", "is below", "35")
+        set_rule(buy, "RSI", "9", "is below", "35", "3")
+        # The usual rule is for one candle, so the candles that were typed go with the rest.
         choose(buy.indicator, "ADX")
         self.assertEqual(shown_rules(window, BUY), [ADX_BUY_ROW])
         choose(sell.indicator, "ADX")
@@ -357,10 +513,37 @@ class IndicatorBasedWindowTests(unittest.TestCase):
         choose(buy.indicator, "RSI")
         self.assertEqual(shown_rules(window, BUY), [BUY_ROW])
 
+    def test_choosing_bollinger_brings_its_usual_rule_with_a_band_for_the_level(self) -> None:
+        window = open_indicator_based_window(self.viz)
+        for side, usual, first in ((BUY, BAND_BUY_ROW, BUY_ROW), (SELL, BAND_SELL_ROW, SELL_ROW)):
+            with self.subTest(side):
+                (row,) = rule_rows(window, side)
+                set_rule(row, "ADX", "9", "is below", "35", "3")
+                # Buy when the close falls under the lower band, sell when it rises over the upper one.
+                choose(row.indicator, "Bollinger")
+                self.assertEqual(shown_rules(window, side), [usual])
+                (band_row,) = rule_rows(window, side)
+                self.assertFalse(row.level.winfo_ismapped())
+                # The candles are in the one box for every indicator, after the band or the level.
+                self.assertIs(band_row.candles, row.candles)
+                # Going back to RSI brings the usual RSI rule, with its level where the band was.
+                set_rule(band_row, "Bollinger", "30", "2.5", "is above", "upper band", "4")
+                choose(row.indicator, "RSI")
+                self.assertEqual(shown_rules(window, side), [first])
+                self.assertEqual(rule_rows(window, side), [row])
+                for part in (band_row.multiplier, band_row.band):
+                    self.assertFalse(part.winfo_ismapped())
+                # The usual Bollinger rule comes back as well, not the one that was typed before.
+                choose(row.indicator, "Bollinger")
+                self.assertEqual(shown_rules(window, side), [usual])
+
     def test_choosing_the_indicator_a_row_already_has_keeps_what_was_typed(self) -> None:
         window = open_indicator_based_window(self.viz)
         (buy,) = rule_rows(window, BUY)
-        for typed in (("RSI", "9", "is below", "35"), ("ADX", "20", "is above", "40")):
+        for typed in (
+            ("RSI", "9", "is below", "35", "3"), ("ADX", "20", "is above", "40", "5"),
+            ("Bollinger", "30", "2.5", "is above", "upper band", "2"),
+        ):
             with self.subTest(typed[0]):
                 set_rule(buy, *typed)
                 choose(buy.indicator, typed[0])
@@ -374,6 +557,15 @@ class IndicatorBasedWindowTests(unittest.TestCase):
             choose(box, value)
             self.assertEqual(box.get(), value)
             self.assertFalse(box.selection_present(), value)
+        # The same is done in a Bollinger row, where the band is changed too.
+        choose(buy.indicator, "Bollinger")
+        self.assertFalse(buy.indicator.selection_present())
+        (buy,) = rule_rows(window, BUY)
+        choices = ((buy.indicator, "Bollinger"), (buy.condition, "is below"), (buy.band, "upper band"))
+        for box, value in choices:
+            choose(box, value)
+            self.assertEqual(box.get(), value)
+            self.assertFalse(box.selection_present(), value)
 
     def test_buttons_show_the_pointing_hand(self) -> None:
         window = open_indicator_based_window(self.viz)
@@ -382,7 +574,7 @@ class IndicatorBasedWindowTests(unittest.TestCase):
         buttons = descendants(window, tk.Button)
         self.assertEqual(
             sorted(button.cget("text") for button in buttons),
-            ["Add buy rule", "Add sell rule", "Cancel", "Remove", "Remove", "Remove", "Test"],
+            ["Add buy rule", "Add sell rule", "Cancel", "Minimize", "Remove", "Remove", "Remove", "Test"],
         )
         for button in buttons:
             self.assertEqual(str(button.cget("cursor")), POINTING_HAND, button.cget("text"))
@@ -391,7 +583,8 @@ class IndicatorBasedWindowTests(unittest.TestCase):
         self.viz.set_selection({10, 11, 12}, None)
         view = self.viz.canvas.xview()
         window = open_indicator_based_window(self.viz)
-        type_strategy(window, [("RSI", "9", "is below", "35"), ADX_BUY_ROW], [], roi="20", stop_loss="10")
+        typed = [("RSI", "9", "is below", "35", "3"), ADX_BUY_ROW]
+        type_strategy(window, typed, [], roi="20", stop_loss="10")
         close(window)
         self.viz.window.update()
         self.assertFalse(window.winfo_exists())
@@ -432,14 +625,34 @@ class IndicatorBasedWindowTests(unittest.TestCase):
     def test_test_names_the_rule_or_box_that_cannot_be_tested(self) -> None:
         window = open_indicator_based_window(self.viz)
         cases = (
-            (([("RSI", "", "crosses below", "30")], [SELL_ROW]),
+            (([("RSI", "", "crosses below", "30", "1")], [SELL_ROW]),
              "Buy rule 1: Period must be a whole number from 2 to 9999."),
-            (([BUY_ROW, ("ADX", "1", "is below", "25")], [SELL_ROW]),
+            (([BUY_ROW, ("ADX", "1", "is below", "25", "1")], [SELL_ROW]),
              "Buy rule 2: Period must be a whole number from 2 to 9999."),
-            (([BUY_ROW], [("RSI", "7", "crosses above", "100.5")]),
+            (([BUY_ROW], [("RSI", "7", "crosses above", "100.5", "1")]),
              "Sell rule 1: Level must be a number from 0 to 100."),
-            (([BUY_ROW], [SELL_ROW, ("ADX", "14", "crosses above", "")]),
+            (([BUY_ROW], [SELL_ROW, ("ADX", "14", "crosses above", "", "1")]),
              "Sell rule 2: Level must be a number from 0 to 100."),
+            (([("Bollinger", "1", "2", "crosses below", "lower band", "1")], [SELL_ROW]),
+             "Buy rule 1: Period must be a whole number from 2 to 9999."),
+            (([BUY_ROW, ("Bollinger", "20", "", "crosses below", "lower band", "1")], [SELL_ROW]),
+             "Buy rule 2: Std. dev. must be a number from 0.1 to 10."),
+            (([BUY_ROW], [("Bollinger", "20", "10.5", "crosses above", "upper band", "1")]),
+             "Sell rule 1: Std. dev. must be a number from 0.1 to 10."),
+            # A rule is for one candle at the least, and the box cannot be left empty.
+            (([("RSI", "7", "crosses below", "30", "")], [SELL_ROW]),
+             "Buy rule 1: Candles must be a whole number from 1 to 9999."),
+            (([BUY_ROW], [SELL_ROW, ("ADX", "14", "crosses above", "25", "0")]),
+             "Sell rule 2: Candles must be a whole number from 1 to 9999."),
+            (([BUY_ROW, ("Bollinger", "20", "2", "crosses below", "lower band", "0")], [SELL_ROW]),
+             "Buy rule 2: Candles must be a whole number from 1 to 9999."),
+            (([BUY_ROW], [("Bollinger", "20", "2", "crosses above", "upper band", "")]),
+             "Sell rule 1: Candles must be a whole number from 1 to 9999."),
+            # The boxes of a row are read from left to right, so its candles are read last.
+            (([("RSI", "7", "crosses below", "", "0")], [SELL_ROW]),
+             "Buy rule 1: Level must be a number from 0 to 100."),
+            (([("Bollinger", "20", "", "crosses below", "lower band", "0")], [SELL_ROW]),
+             "Buy rule 1: Std. dev. must be a number from 0.1 to 10."),
             (([BUY_ROW], [SELL_ROW], "0"), "ROI must be empty or a number greater than 0."),
             (([BUY_ROW], [SELL_ROW], "", "100"),
              "Stop loss must be empty or a number greater than 0 and less than 100."),

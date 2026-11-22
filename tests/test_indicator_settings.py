@@ -215,7 +215,8 @@ class IndicatorSettingsWindowTests(unittest.TestCase):
         for mode in ("RSI", "ADX", "STOSC", "W%R"):
             window = self.open_settings(mode)
             texts = [w.cget("text") for w in all_widgets(window) if isinstance(w, tk.Button)]
-            self.assertEqual(texts, ["Cancel", "Apply", "Help"], mode)
+            # Minimize has a row of its own above the settings.
+            self.assertEqual(texts, ["Minimize", "Cancel", "Apply", "Help"], mode)
             window.destroy()
 
     def test_each_window_shows_one_entry_per_parameter_with_its_current_value(self) -> None:

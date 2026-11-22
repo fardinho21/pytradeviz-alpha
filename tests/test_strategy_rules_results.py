@@ -3,31 +3,44 @@ from __future__ import annotations
 import tkinter as tk
 import unittest
 from decimal import Decimal
-from pathlib import Path
 from tkinter import ttk
 from typing import Any, Callable, List, Sequence, Set, Tuple
 from unittest import mock
 
-from paginated_price_data import PaginatedPriceData
 from strategies import price_text
 from strategy_rules import RuleTrade, percent_text, rule_strategy, rule_trades, trade_returns
 from test_strategies_results import TradeListTestCase
 from test_strategies_window import descendants, find_button, opened_windows
-from test_strategy_rules import BUY_ROW, SELL_ROW
+from test_strategy_rules import BAND_BUY_ROW, BAND_SELL_ROW, BUY_ROW, SELL_ROW, SOLD_BY_BAND_RULE
 from test_strategy_rules_window import (
     ADX_BUY_ROW, ADX_SELL_ROW, exit_boxes, open_indicator_based_window, shown_strategy, type_strategy,
 )
+from trend import wilder_rsi
 
 
 # Strategies as they are typed: the buy rules, the sell rules, the ROI and the stop loss.
 DEFAULT = ([BUY_ROW], [SELL_ROW], "", "")
 WITH_EXITS = ([BUY_ROW], [SELL_ROW], "20", "10")
 COMBINED = ([BUY_ROW, ADX_BUY_ROW], [ADX_SELL_ROW], "", "8")
-ONE_TRADE = ([("RSI", "14", "crosses below", "20")], [("RSI", "14", "crosses above", "70")], "", "")
-LEFT_OPEN = ([("RSI", "21", "crosses below", "30")], [("RSI", "21", "crosses above", "70")], "", "")
+ONE_TRADE = (
+    [("RSI", "14", "crosses below", "20", "1")], [("RSI", "14", "crosses above", "70", "1")], "", "")
+LEFT_OPEN = (
+    [("RSI", "21", "crosses below", "30", "1")], [("RSI", "21", "crosses above", "70", "1")], "", "")
 ROI_ALONE = ([BUY_ROW], [], "50", "")
 # RSI is never below zero, so it never falls below it.
-NEVER_BUYS = ([("RSI", "7", "crosses below", "0")], [SELL_ROW], "", "")
+NEVER_BUYS = ([("RSI", "7", "crosses below", "0", "1")], [SELL_ROW], "", "")
+# Bought on a close under the lower Bollinger band and sold on a close over the upper one.
+BAND_RULES = ([BAND_BUY_ROW], [BAND_SELL_ROW], "", "")
+BAND_RULES_COMBINED = ([BAND_BUY_ROW, ADX_BUY_ROW], [BAND_SELL_ROW], "", "8")
+# Bought when RSI(7) has been below 30 for three candles, the first of which took it there. Sold
+# when the close has been over the upper band for two candles, or RSI(7) above 70 for the two
+# candles that its rise began with.
+SOLD_BY_BAND_FOR_TWO = "Bollinger(20, 2): close is above upper band for 2 candles"
+SOLD_BY_RSI_FOR_TWO = "RSI(7) crosses above 70 for 2 candles"
+SEVERAL_CANDLES = (
+    [("RSI", "7", "crosses below", "30", "3")],
+    [("Bollinger", "20", "2", "is above", "upper band", "2"), ("RSI", "7", "crosses above", "70", "2")],
+    "", "")
 
 SOLD_BY_RSI = "RSI(7) crosses above 70"
 # The candles of the sample file, and what buying the first and holding to the last made.
@@ -93,15 +106,6 @@ class IndicatorBasedResultsTests(TradeListTestCase):
         self.assertEqual(shown_strategy(window), strategy)
         self.assertEqual(str(window.grab_current()), str(window))
 
-    def build_paginated_app(self) -> PaginatedPriceData:
-        """Start the program again on the sample file, read a page at a time as an opened file is."""
-        self.viz.window.destroy()
-        data_file = Path(__file__).resolve().parents[1] / "data" / "XRP_4_year_ohlc_no_vol.csv"
-        source = PaginatedPriceData(data_file)
-        self.build_app(source.load_initial(), source)
-        self.assertEqual(len(self.viz.price_data), 365)
-        return source
-
     def test_test_lists_the_trades_in_a_modal_window(self) -> None:
         window, results, tree = self.open_results(*DEFAULT)
         self.assertEqual(results.title(), "Indicator Based Strategy Results")
@@ -130,7 +134,8 @@ class IndicatorBasedResultsTests(TradeListTestCase):
             f"Total return: -24.82%. {HELD}\n"
             "Select a trade to show it on the chart.",
         )
-        self.assertEqual([button.cget("text") for button in descendants(results, tk.Button)], ["Close"])
+        self.assertEqual(
+            [button.cget("text") for button in descendants(results, tk.Button)], ["Minimize", "Close"])
 
     def test_one_trade_is_counted_as_one_trade(self) -> None:
         window, results, tree = self.open_results(*ONE_TRADE)
@@ -184,6 +189,95 @@ class IndicatorBasedResultsTests(TradeListTestCase):
             self.summary(results).splitlines()[:2],
             [f"18 trades, 5 profitable. {TESTED}", f"Total return: +2.78%. {HELD}"],
         )
+
+    def test_bollinger_rules_buy_under_the_lower_band_and_sell_over_the_upper_band(self) -> None:
+        window, results, tree = self.open_results(*BAND_RULES)
+        self.assertEqual(self.viz.rule_strategy, rule_strategy(*BAND_RULES))
+        listing = self.listing(tree)
+        self.assertEqual(len(listing), 17)
+        # Each is bought at the open after the close fell under the lower band, and sold at the
+        # open after it rose over the upper band.
+        self.assertEqual(listing[:3], [
+            ("2018-05-29", "0.54689", "2018-09-21", "0.44877", "-17.94%", SOLD_BY_BAND_RULE),
+            ("2018-10-12", "0.38319", "2018-11-06", "0.5022", "+31.06%", SOLD_BY_BAND_RULE),
+            ("2018-11-23", "0.42766", "2018-12-25", "0.40075", "-6.29%", SOLD_BY_BAND_RULE),
+        ])
+        self.assertEqual(
+            listing[16], ("2022-01-22", "0.6368", "2022-02-08", "0.8314", "+30.56%", SOLD_BY_BAND_RULE))
+        self.assertEqual(listing, self.expected_listing(self.rows, *BAND_RULES))
+        self.assertEqual(
+            self.summary(results).splitlines()[:2],
+            [f"17 trades, 8 profitable. {TESTED}", f"Total return: +2.34%. {HELD}"],
+        )
+        # The bands are the ones that the chart draws for the same period and multiplier. The
+        # first trade was bought on candle 25 and sold on candle 140, after the closes that
+        # went under the lower band and over the upper band.
+        self.assertEqual(self.viz.bollinger_parameters(), (20, 2))
+        _, upper, lower = self.viz.indicators_object.calculate_bollinger(20, 2)
+        closes = [row[4] for row in self.rows]
+        self.assertTrue(closes[23] >= lower[23] and closes[24] < lower[24])
+        self.assertTrue(closes[138] <= upper[138] and closes[139] > upper[139])
+        self.assertEqual(self.viz.trade_indices, self.trade_days(*BAND_RULES))
+        self.assertEqual(len(self.viz.trade_indices), 34)
+        self.assertTrue({25, 140} <= self.viz.trade_indices)
+        # The column is widened for the name of the rule that sold.
+        self.assert_columns_fit(tree, LEAST_WIDTHS)
+
+    def test_bollinger_rules_are_tested_with_the_rules_of_other_indicators(self) -> None:
+        # Bought when the close falls under the lower band while ADX(14) is below 25, and sold
+        # when the close rises over the upper band or the price has fallen 8 %.
+        window, results, tree = self.open_results(*BAND_RULES_COMBINED)
+        listing = self.listing(tree)
+        self.assertEqual(len(listing), 20)
+        self.assertEqual(
+            listing[0], ("2018-08-07", "0.41328", "2018-08-07", "0.3802176", "-8.00%", "Stop loss"))
+        self.assertEqual(listing, self.expected_listing(self.rows, *BAND_RULES_COMBINED))
+        sold_by = [row[5] for row in listing]
+        self.assertEqual([sold_by.count(name) for name in ("Stop loss", SOLD_BY_BAND_RULE)], [14, 6])
+        self.assertEqual(
+            self.summary(results).splitlines()[:2],
+            [f"20 trades, 6 profitable. {TESTED}", f"Total return: -17.02%. {HELD}"],
+        )
+
+    def test_rules_for_several_candles_wait_for_the_last_of_them(self) -> None:
+        window, results, tree = self.open_results(*SEVERAL_CANDLES)
+        self.assertEqual(self.viz.rule_strategy, rule_strategy(*SEVERAL_CANDLES))
+        listing = self.listing(tree)
+        self.assertEqual(len(listing), 9)
+        # A sale names its rule with the candles that the rule asks for.
+        self.assertEqual(listing[:2], [
+            ("2018-06-25", "0.47418", "2018-09-21", "0.44877", "-5.36%", SOLD_BY_RSI_FOR_TWO),
+            ("2018-11-26", "0.38186", "2019-02-20", "0.3225", "-15.54%", SOLD_BY_BAND_FOR_TWO),
+        ])
+        self.assertEqual(listing, self.expected_listing(self.rows, *SEVERAL_CANDLES))
+        sold_by = [row[5] for row in listing]
+        self.assertEqual(
+            [sold_by.count(name) for name in (SOLD_BY_BAND_FOR_TWO, SOLD_BY_RSI_FOR_TWO)], [8, 1])
+        self.assertEqual(
+            self.summary(results).splitlines()[:2],
+            [f"9 trades, 6 profitable. {TESTED}", f"Total return: +177.88%. {HELD}"],
+        )
+        closes = [row[4] for row in self.rows]
+        rsi = wilder_rsi(closes, 7)
+        # The fall of RSI(7) below 30 on candle 18, which a rule for one candle buys on, lasted
+        # two candles. The fall on candle 49 lasted to candle 51, so candle 52 is the first buy.
+        self.assertTrue(rsi[17] >= 30 and max(rsi[18:20]) < 30 and rsi[20] >= 30)
+        self.assertTrue(rsi[48] >= 30 and max(rsi[49:52]) < 30)
+        self.assertEqual(self.viz.trade_indices, self.trade_days(*SEVERAL_CANDLES))
+        self.assertEqual(min(self.viz.trade_indices), 52)
+        # RSI(7) rose above 70 on candle 138 and was still there on candle 139, so the trade was
+        # sold on candle 140. The close of candle 139 was the first one over the upper band,
+        # which is a candle too few for the other rule.
+        self.assertTrue(rsi[137] <= 70 and min(rsi[138:140]) > 70)
+        _, upper, _ = self.viz.indicators_object.calculate_bollinger(20, 2)
+        self.assertTrue(closes[138] <= upper[138] and closes[139] > upper[139])
+        self.assertIn(140, self.viz.trade_indices)
+        # The column is widened for the name of the rule that sold.
+        self.assert_columns_fit(tree, LEAST_WIDTHS)
+        # The candles are still in their boxes when the list is closed.
+        find_button(results, "Close").invoke()
+        self.viz.window.update()
+        self.assert_strategy_kept(window, *SEVERAL_CANDLES)
 
     def test_position_still_open_at_the_end_is_valued_at_the_last_close(self) -> None:
         window, results, tree = self.open_results(*LEFT_OPEN)
@@ -414,7 +508,7 @@ class IndicatorBasedResultsTests(TradeListTestCase):
         self.assertEqual(len(self.viz.trade_indices), 38)
 
     def test_tested_strategy_is_shown_when_the_window_is_opened_again(self) -> None:
-        tested = ([("RSI", "07", "crosses below", "30.50"), ADX_BUY_ROW], [], "20.0", "")
+        tested = ([("RSI", "07", "crosses below", "30.50", "1"), ADX_BUY_ROW], [], "20.0", "")
         window, results, tree = self.open_results(*tested)
         self.assertEqual(self.viz.rule_strategy, rule_strategy(*tested))
         find_button(results, "Close").invoke()
@@ -425,8 +519,49 @@ class IndicatorBasedResultsTests(TradeListTestCase):
         self.assertEqual(self.viz.rule_strategy, rule_strategy(*tested))
         window = open_indicator_based_window(self.viz)
         # The numbers are shown as they were understood, without the zeros that change nothing.
-        self.assertEqual(
-            shown_strategy(window), ([("RSI", "7", "crosses below", "30.5"), ADX_BUY_ROW], [], "20", ""))
+        shown = ([("RSI", "7", "crosses below", "30.5", "1"), ADX_BUY_ROW], [], "20", "")
+        self.assertEqual(shown_strategy(window), shown)
+        # They give the same trades when they are tested as they are.
+        find_button(window, "Test").invoke()
+        self.viz.window.update()
+        (results,) = opened_windows(window)
+        (tree,) = descendants(results, ttk.Treeview)
+        self.assertEqual(self.listing(tree), self.expected_listing(self.rows, *tested))
+
+    def test_tested_bollinger_rules_are_shown_when_the_window_is_opened_again(self) -> None:
+        dip = ("RSI", "7", "is below", "30", "1")
+        sell_rows = [("Bollinger", "10", "1.5", "crosses above", "upper band", "1"), ADX_SELL_ROW]
+        tested = ([dip, ("Bollinger", "020", "2.50", "is below", "lower band", "1")], sell_rows, "", "")
+        window, results, tree = self.open_results(*tested)
+        self.assertEqual(self.viz.rule_strategy, rule_strategy(*tested))
+        self.assertEqual(len(self.listing(tree)), 15)
+        find_button(results, "Close").invoke()
+        find_button(window, "Cancel").invoke()
+        self.viz.window.update()
+        window = open_indicator_based_window(self.viz)
+        # Each row has the parts of its rule, with the numbers as they were understood.
+        shown = ([dip, ("Bollinger", "20", "2.5", "is below", "lower band", "1")], sell_rows, "", "")
+        self.assertEqual(shown_strategy(window), shown)
+        # They give the same trades when they are tested as they are.
+        find_button(window, "Test").invoke()
+        self.viz.window.update()
+        (results,) = opened_windows(window)
+        (tree,) = descendants(results, ttk.Treeview)
+        self.assertEqual(self.listing(tree), self.expected_listing(self.rows, *tested))
+
+    def test_tested_candles_are_shown_when_the_window_is_opened_again(self) -> None:
+        band_row = ("Bollinger", "20", "2", "crosses above", "upper band")
+        tested = ([("RSI", "7", "crosses below", "30", "03")], [band_row + ("002",), ADX_SELL_ROW], "", "")
+        window, results, tree = self.open_results(*tested)
+        self.assertEqual(self.viz.rule_strategy, rule_strategy(*tested))
+        self.assertEqual(len(self.listing(tree)), 13)
+        find_button(results, "Close").invoke()
+        find_button(window, "Cancel").invoke()
+        self.viz.window.update()
+        window = open_indicator_based_window(self.viz)
+        # Each rule is for the candles that were understood, and the one that was left alone for one.
+        shown = ([("RSI", "7", "crosses below", "30", "3")], [band_row + ("2",), ADX_SELL_ROW], "", "")
+        self.assertEqual(shown_strategy(window), shown)
         # They give the same trades when they are tested as they are.
         find_button(window, "Test").invoke()
         self.viz.window.update()

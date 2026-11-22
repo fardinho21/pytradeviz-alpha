@@ -196,7 +196,7 @@ class CursorTests(unittest.TestCase):
                      if w not in before and isinstance(w, tk.Toplevel)]
         self.addCleanup(window.destroy)
         buttons = self.descendants(window, tk.Button)
-        self.assertEqual(sorted(b.cget("text") for b in buttons), ["Apply", "Close", "Help"])
+        self.assertEqual(sorted(b.cget("text") for b in buttons), ["Apply", "Close", "Help", "Minimize"])
         for button in buttons:
             self.assertEqual(self.cursor_of(button), POINTING_HAND)
         # Checkboxes and radio buttons are not buttons, so they keep the arrow.

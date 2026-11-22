@@ -146,7 +146,11 @@ class PositionalWindowTests(unittest.TestCase):
         for above, below in zip(first_row[2:], second_row):
             self.assertEqual(above.winfo_rootx(), below.winfo_rootx())
         second_row_bottom = max(widget.winfo_rooty() + widget.winfo_height() for widget in second_row)
-        buttons = in_reading_order(window, tk.Button)
+        # Minimize is above the boxes, and the buttons of the order are below them.
+        minimize, *buttons = in_reading_order(window, tk.Button)
+        self.assertEqual(minimize.cget("text"), "Minimize")
+        first_row_top = min(widget.winfo_rooty() for widget in first_row)
+        self.assertLessEqual(minimize.winfo_rooty() + minimize.winfo_height(), first_row_top)
         self.assertEqual([button.cget("text") for button in buttons], ["Test", "Cancel"])
         assert_on_one_line(self, buttons)
         for button in buttons:

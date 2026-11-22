@@ -50,9 +50,9 @@ from strategies import (
     price_text, stop_price_text, target_price_text,
 )
 from strategy_rules import (
-    BUY, CONDITIONS, DEFAULT_RULES, INDICATORS, MAX_RULES, SELL, Rule, RuleStrategy, RuleTrade,
-    buy_and_hold_return, compound_return, default_strategy, is_period_text, next_default_rule,
-    percent_text, rule_strategy, rule_trades, trade_returns,
+    BANDS, BOLLINGER, BUY, CONDITIONS, DEFAULT_RULES, INDICATORS, MAX_RULES, SELL, AnyRule, BandRule,
+    RuleStrategy, RuleTrade, buy_and_hold_return, compound_return, default_strategy, is_period_text,
+    next_default_rule, percent_text, rule_strategy, rule_trades, trade_returns,
 )
 from timeframes import (
     DAILY, TIMEFRAMES, candle_ids, candle_last_rows, shows_day_labels, timeframe_rows,
@@ -325,6 +325,17 @@ class PyTradeViz:
         self._tab_states: Dict[str, ChartTabState] = {}
         self.selected_indices = set()
         self.trade_indices = set()
+        # The trades of each open list of trades, keyed by the window of the list. The list that
+        # was opened or shown last comes last.
+        self._trade_lists: Dict[Any, Sequence[Trade]] = {}
+        # The button above the chart of each minimized window, keyed by that window.
+        self.minimized: Dict[Any, Any] = {}
+        # The widget that is to have the keyboard once a minimized window is shown, keyed by
+        # that window.
+        self._keyboard_wanted: Dict[Any, Any] = {}
+        # Whether the mouse button went down outside the window that had the grab and the windows
+        # it was opened under.
+        self._pressed_outside = False
         self.labeled_selections = {}
         self.data_source = data_source
         # The rule based strategy that was tested last. The Indicator Based window opens with it.
@@ -381,6 +392,7 @@ class PyTradeViz:
         self.initialize_select_mode_button(ttk, tk)
         self.initialize_draw_button(ttk, tk)
         self.initialize_fib_button(ttk)
+        self.initialize_window_bar(ttk)
         self.initialize_timeframe_bar(ttk)
         self.initialize_select_mode_label(tk)
         # configure
@@ -471,6 +483,10 @@ class PyTradeViz:
         self, rows: List[List[Any]], data_source: Optional[PriceDataSource]
     ) -> None:
         """Show rows from the first candle, replacing what was on the chart. Empty rows clear it."""
+        # The trades of an open list were found in the rows that are replaced, so the list is
+        # closed. It can be open here only as a minimized window.
+        for window in list(self._trade_lists):
+            window.destroy()
         self.reset_interaction_state()
         self._daily_rows = rows
         self.data_source = data_source
@@ -652,6 +668,9 @@ class PyTradeViz:
         self.update_ticker_label()
         self.update_timeframe_buttons()
         self.draw_overlays()
+        # The candles were drawn plain, so the trades of an open list are highlighted again.
+        self.trade_indices = set()
+        self.highlight_listed_trades()
 
     def apply_view_zoom(self, zoom_level: float, candle_height_scale: float) -> None:
         """Apply a saved zoom and candle height to a chart that was just built and fitted.
@@ -671,6 +690,18 @@ class PyTradeViz:
             self._scale_y *= y_factor
         self.zoom_level = zoom_level
         self.candle_height_scale = candle_height_scale
+
+    def initialize_window_bar(self, ttk: ModuleType) -> None:
+        # Holds a button for each minimized window, at the top left of the row of the tabs. It
+        # is made before the tabs, which stay on top of it when the buttons fill the row.
+        self.window_bar = ttk.Frame(self.window)
+
+    def update_window_bar(self) -> None:
+        if self.minimized:
+            # Placed instead of gridded, so that a long row of buttons cannot widen the chart.
+            self.window_bar.place(x=0, y=2)
+        else:
+            self.window_bar.place_forget()
 
     def initialize_timeframe_bar(self, ttk: ModuleType) -> None:
         # Its own grid row above the chart, right-aligned so the tabs sit at the top right.
@@ -752,7 +783,7 @@ class PyTradeViz:
             button.state([state])
 
     def open_reset_window(self, tk: ModuleType) -> None:
-        window = self.open_modal_window(tk, "Reset")
+        window = self.open_modal_window(tk, "Reset", minimizable=False)
         tk.Label(
             window, justify="left", wraplength=360, text=(
                 "Reset every indicator to its default settings and clear all drawings "
@@ -772,7 +803,7 @@ class PyTradeViz:
         self.reset_chart_configuration()
 
     def open_about_window(self, tk: ModuleType) -> None:
-        window = self.open_modal_window(tk, "About PyTradeViz")
+        window = self.open_modal_window(tk, "About PyTradeViz", minimizable=False)
         about_text = (
             "PyTradeViz - Alpha\n"
             "Version: alpha 0.0.1\n"
@@ -794,7 +825,8 @@ class PyTradeViz:
 
     def open_positional_window(self, tk: ModuleType) -> None:
         window = self.open_modal_window(tk, "Positional Strategy")
-        self.build_positional_content(tk, window)
+        if window is not None:
+            self.build_positional_content(tk, window)
 
     def build_positional_content(self, tk: ModuleType, window: Any) -> None:
         entry_price, roi, target, stop_loss, stop = (tk.StringVar(window) for _ in range(5))
@@ -846,7 +878,7 @@ class PyTradeViz:
                 variable.set("")
             # The boxes are gone when this runs because the window is closing.
             if entry_price_box.winfo_exists():
-                entry_price_box.focus_set()
+                self.give_keyboard(entry_price_box)
 
         testing = False
 
@@ -906,12 +938,13 @@ class PyTradeViz:
 
     def open_indicator_based_window(self, tk: ModuleType) -> None:
         window = self.open_modal_window(tk, "Indicator Based Strategy")
-        self.build_indicator_based_content(tk, window)
+        if window is not None:
+            self.build_indicator_based_content(tk, window)
 
     def build_indicator_based_content(self, tk: ModuleType, window: Any) -> None:
         strategy = self.rule_strategy
-        # A period box takes digits only. The level, ROI and stop loss boxes refuse any edit that
-        # would leave something other than a number.
+        # A period box and a candles box take digits only. The level, multiplier, ROI and stop
+        # loss boxes refuse any edit that would leave something other than a number.
         period_check = (window.register(is_period_text), "%P")
         number_check = (window.register(is_price_text), "%P")
         read_buy_rows = self.build_rule_group(
@@ -955,19 +988,21 @@ class PyTradeViz:
         tk.Button(buttons, text="Cancel", width=8, command=window.destroy).pack(side="left", padx=(8, 0))
 
     def build_rule_group(
-        self, tk: ModuleType, window: Any, side: str, title: str, rules: Sequence[Rule],
+        self, tk: ModuleType, window: Any, side: str, title: str, rules: Sequence[AnyRule],
         period_check: Tuple[str, str], number_check: Tuple[str, str],
-    ) -> Callable[[], List[Tuple[str, str, str, str]]]:
+    ) -> Callable[[], List[Tuple[str, ...]]]:
         """Build the rows of the buy rules or of the sell rules of a strategy, one rule to a row.
 
         Rows can be added until there are ``MAX_RULES`` of them, and removed, though a buy rule
         that is the only one stays. The call that is returned reads the rows: the indicator,
-        the period text, the condition and the level text of each.
+        the period text, the condition and the level text of each. A Bollinger row is read as
+        the indicator, the period text, the multiplier text, the condition and the band. Both
+        end with the text of how many candles in a row the rule asks for.
         """
         group = tk.LabelFrame(window, text=title, padx=10, pady=6)
         group.pack(fill="x", padx=12, pady=(12, 0))
         # The frame of each row, its Remove button and the call that reads it.
-        rows: List[Tuple[Any, Any, Callable[[], Tuple[str, str, str, str]]]] = []
+        rows: List[Tuple[Any, Any, Callable[[], Tuple[str, ...]]]] = []
 
         def update_buttons() -> None:
             # A strategy needs a buy rule, so the only one left cannot be removed.
@@ -981,7 +1016,7 @@ class PyTradeViz:
             frame.destroy()
             update_buttons()
 
-        def add_row(rule: Rule) -> Any:
+        def add_row(rule: AnyRule) -> Any:
             """Add a row that holds ``rule``, and return its period box."""
             frame = tk.Frame(group)
             # The button that adds a row stays under the rows.
@@ -990,31 +1025,67 @@ class PyTradeViz:
             # other programs, where it would replace what is selected there, and it is cleared
             # after the choice.
             indicator_box = ttk.Combobox(
-                frame, values=INDICATORS, state="readonly", width=5, exportselection=False)
+                frame, values=INDICATORS, state="readonly", width=9, exportselection=False)
             indicator_box.pack(side="left")
             tk.Label(frame, text="Period").pack(side="left", padx=(10, 0))
             period_box = tk.Entry(frame, width=5, validate="key", validatecommand=period_check)
             period_box.pack(side="left", padx=(6, 10))
+            # A Bollinger rule compares the close with a band. Its row also has how many standard
+            # deviations the bands are from the average, and a band where the others have a level.
+            multiplier_label = tk.Label(frame, text="Std. dev.")
+            multiplier_box = tk.Entry(frame, width=5, validate="key", validatecommand=number_check)
+            close_label = tk.Label(frame, text="Close")
             condition_box = ttk.Combobox(
                 frame, values=CONDITIONS, state="readonly", width=13, exportselection=False)
             condition_box.pack(side="left")
             level_box = tk.Entry(frame, width=7, validate="key", validatecommand=number_check)
-            level_box.pack(side="left", padx=(6, 10))
+            band_box = ttk.Combobox(
+                frame, values=BANDS, state="readonly", width=10, exportselection=False)
+            # How many candles in a row the rule has to be true on. One is the candle on its own.
+            candles_label = tk.Label(frame, text="for")
+            candles_label.pack(side="left")
+            candles_box = tk.Entry(frame, width=5, validate="key", validatecommand=period_check)
+            candles_box.pack(side="left", padx=6)
+            tk.Label(frame, text="candles").pack(side="left", padx=(0, 10))
             remove_button = tk.Button(frame, text="Remove", command=lambda: remove_row(frame))
             remove_button.pack(side="left")
-            # The indicator that the period, condition and level of the row were last set for.
+            # The indicator that the rest of the row was last set for.
             shown = rule.indicator
 
-            def fill(values: Rule) -> None:
+            def fill(values: AnyRule) -> None:
                 indicator_box.set(values.indicator)
                 condition_box.set(values.condition)
-                for box, text in ((period_box, str(values.period)), (level_box, price_text(values.level))):
+                # A row shows only the parts that its rule has, each in its place in the row.
+                for part in (multiplier_label, multiplier_box, close_label, level_box, band_box):
+                    part.pack_forget()
+                if isinstance(values, BandRule):
+                    band_box.set(values.band)
+                    number_box, number = multiplier_box, values.multiplier
+                    multiplier_label.pack(side="left", before=condition_box)
+                    multiplier_box.pack(side="left", padx=(6, 10), before=condition_box)
+                    close_label.pack(side="left", padx=(0, 6), before=condition_box)
+                    band_box.pack(side="left", padx=(6, 10), before=candles_label)
+                else:
+                    number_box, number = level_box, values.level
+                    level_box.pack(side="left", padx=(6, 10), before=candles_label)
+                texts = (
+                    (period_box, str(values.period)), (number_box, price_text(number)),
+                    (candles_box, str(values.candles)),
+                )
+                for box, text in texts:
                     box.delete(0, "end")
                     box.insert(0, text)
 
+            def read() -> Tuple[str, ...]:
+                indicator, period, condition = indicator_box.get(), period_box.get(), condition_box.get()
+                candles = candles_box.get()
+                if indicator == BOLLINGER:
+                    return indicator, period, multiplier_box.get(), condition, band_box.get(), candles
+                return indicator, period, condition, level_box.get(), candles
+
             def indicator_chosen(_event: Any) -> None:
-                # Another indicator brings its own period, condition and level. Choosing the one
-                # that the row already has keeps what was typed for it.
+                # Another indicator brings its own rule. Choosing the one that the row already
+                # has keeps what was typed for it.
                 nonlocal shown
                 indicator_box.selection_clear()
                 if indicator_box.get() != shown:
@@ -1022,10 +1093,10 @@ class PyTradeViz:
                     fill(DEFAULT_RULES[side, shown])
 
             indicator_box.bind("<<ComboboxSelected>>", indicator_chosen)
-            condition_box.bind("<<ComboboxSelected>>", lambda _event: condition_box.selection_clear())
+            for box in (condition_box, band_box):
+                box.bind("<<ComboboxSelected>>", lambda _event, box=box: box.selection_clear())
             fill(rule)
-            rows.append((frame, remove_button, lambda: (
-                indicator_box.get(), period_box.get(), condition_box.get(), level_box.get())))
+            rows.append((frame, remove_button, read))
             update_buttons()
             return period_box
 
@@ -1132,6 +1203,7 @@ class PyTradeViz:
 
         ``columns`` are the headings of the list with the least width of each, and ``listing``
         holds the text of each trade under them. ``closed`` is called when the list is closed.
+        Of several open lists, the one that was opened or shown last has its trades highlighted.
         """
         window = self.open_modal_window(tk, title, parent=parent)
         tk.Label(window, text=summary, justify="left", anchor="w").pack(
@@ -1159,50 +1231,64 @@ class PyTradeViz:
             tree.insert("", "end", iid=str(number), values=tuple(values))
         tk.Button(window, text="Close", width=8, command=window.destroy).pack(pady=12)
 
-        # The candles of the active tab that hold the days each trade was bought and sold on.
-        ids, _ = self.timeframe_map()
-        candles = [
-            (ids[trade.buy_index], None if trade.sell_index is None else ids[trade.sell_index])
-            for trade in trades
-        ]
-
         def show_selected(_event: Any) -> None:
+            # A minimized window lies over nothing.
+            shown = [member for member in (parent, window) if member.winfo_viewable()]
             for item in tree.selection():
-                buy, sell = candles[int(item)]
-                self.show_trade_on_chart(
-                    buy, sell, float(trades[int(item)].buy_price), (parent, window))
+                trade = trades[int(item)]
+                buy, sell = self.trade_candles(trade)
+                self.show_trade_on_chart(buy, sell, float(trade.buy_price), shown)
+
+        def highlight() -> None:
+            # The list that was opened or shown last comes last, and its trades are highlighted.
+            self._trade_lists.pop(window, None)
+            self._trade_lists[window] = trades
+            self.highlight_listed_trades()
 
         def close(event: Any) -> None:
             if event.widget is not window:
                 return
+            self._trade_lists.pop(window, None)
             # The chart is gone before this window when the whole program is closing.
             if self.canvas.winfo_exists():
-                self.set_trade_highlights(set())
+                self.highlight_listed_trades()
             if closed is not None:
                 closed()
             self.return_grab(event, window, parent)
 
         tree.bind("<<TreeviewSelect>>", show_selected)
         window.bind("<Destroy>", close)
-        # Only the trades are highlighted while the list is open, so a selection made on the
-        # chart is dropped first.
+        # A selection made on the chart is dropped first, so that only the trades are
+        # highlighted when the list opens.
         self._roi_span = None
         self.roi_header = None
         self.roi_results = None
         self.set_selection(set(), None)
-        self.set_trade_highlights(
-            {index for pair in candles for index in pair if index is not None})
+        highlight()
+        self.when_shown_again(window, highlight)
         if trades:
             # The first trade is shown beside this window, which needs its full size for that.
             window.update_idletasks()
             tree.selection_set("0")
             tree.focus("0")
-            tree.focus_set()
+            self.give_keyboard(tree)
+
+    def trade_candles(self, trade: Trade) -> Tuple[int, Optional[int]]:
+        """The candles of the active tab that hold the days a trade was bought and sold on."""
+        ids, _ = self.timeframe_map()
+        return ids[trade.buy_index], None if trade.sell_index is None else ids[trade.sell_index]
+
+    def highlight_listed_trades(self) -> None:
+        """Highlight the candles of the trades in the list that was opened or shown last, if any."""
+        trades = next(reversed(self._trade_lists.values()), ())
+        candles = (self.trade_candles(trade) for trade in trades)
+        self.set_trade_highlights({index for pair in candles for index in pair if index is not None})
 
     def set_trade_highlights(self, indices: Set[int]) -> None:
         changed = self.trade_indices ^ indices
         self.trade_indices = set(indices)
-        self.restyle_candles(changed)
+        if changed:
+            self.restyle_candles(changed)
 
     def show_trade_on_chart(
         self, buy: int, sell: Optional[int], entry_price: float, windows: Sequence[Any],
@@ -1256,9 +1342,14 @@ class PyTradeViz:
 
     def open_data_window(self, tk: ModuleType) -> None:
         window = self.open_modal_window(tk, "Data")
+        if window is None:
+            return
         listing = tk.Frame(window)
         listing.pack(fill="both", expand=True, padx=12, pady=(12, 0))
         self.fill_data_listing(tk, listing)
+        # Selections can be labeled on the chart, or go with the data file, while the window is
+        # minimized.
+        self.when_shown_again(window, lambda: self.fill_data_listing(tk, listing))
         buttons = tk.Frame(window)
         buttons.pack(fill="x", padx=12, pady=12)
         tk.Button(buttons, text="Close", width=12, command=window.destroy).pack(side="right")
@@ -1335,7 +1426,7 @@ class PyTradeViz:
         )
 
     def open_label_window(self, indices: Set[int]) -> None:
-        window = self.open_modal_window(tk, "Label selection")
+        window = self.open_modal_window(tk, "Label selection", minimizable=False)
         tk.Label(
             window, text=f"Enter a label for the {len(indices)} selected candle(s):",
         ).pack(anchor="w", padx=12, pady=(12, 4))
@@ -1415,12 +1506,13 @@ class PyTradeViz:
 
     def open_moving_average_window(self, tk: ModuleType, name: str) -> None:
         window = self.open_modal_window(tk, name)
-        if name == "Simple":
+        if window is not None and name == "Simple":
             self.build_simple_moving_average_content(tk, window)
 
     def open_bollinger_window(self, tk: ModuleType) -> None:
         window = self.open_modal_window(tk, "Bollinger Bands")
-        self.build_bollinger_content(tk, window)
+        if window is not None:
+            self.build_bollinger_content(tk, window)
 
     def bollinger_parameters(self) -> Tuple[int, float]:
         return self.bollinger_applied["period"], self.bollinger_applied["multiplier"]
@@ -1491,7 +1583,8 @@ class PyTradeViz:
 
     def open_indicator_settings_window(self, tk: ModuleType, mode: str) -> None:
         window = self.open_modal_window(tk, INDICATOR_TITLES[mode])
-        self.build_indicator_settings_content(tk, window, mode)
+        if window is not None:
+            self.build_indicator_settings_content(tk, window, mode)
 
     def build_indicator_settings_content(self, tk: ModuleType, window: Any, mode: str) -> None:
         # Entries are staged as text and only applied by the Apply button, which validates them first.
@@ -1542,7 +1635,8 @@ class PyTradeViz:
 
     def open_levels_window(self, tk: ModuleType) -> None:
         window = self.open_modal_window(tk, "Support and Resistance")
-        self.build_levels_content(tk, window)
+        if window is not None:
+            self.build_levels_content(tk, window)
 
     def build_levels_content(self, tk: ModuleType, window: Any) -> None:
         # Edits are staged in these variables and only applied by the Apply button.
@@ -1626,6 +1720,13 @@ class PyTradeViz:
             buttons, text="Apply", width=8,
             command=lambda: self.apply_levels(window, staged),
         ).pack(side="right", padx=(0, 8))
+        # The data file and the tab can change while the window is minimized, and the levels
+        # that it reports change with them.
+        self.when_shown_again(window, lambda: self.show_levels_status(staged))
+
+    def show_levels_status(self, staged: Dict[str, Any]) -> None:
+        for label, status in staged["status"].items():
+            status.set(self.levels_status_text(label))
 
     def apply_levels(self, window: Any, staged: Dict[str, Any]) -> None:
         values = {key: var.get().strip() for key, var in staged["settings"].items()}
@@ -1661,8 +1762,7 @@ class PyTradeViz:
             },
         }
         self.dismiss_sr_popups()
-        for label, status in staged["status"].items():
-            status.set(self.levels_status_text(label))
+        self.show_levels_status(staged)
         self.draw_overlays()
 
     def levels_status_text(self, label: str) -> str:
@@ -1778,6 +1878,9 @@ class PyTradeViz:
         sections: Tuple[Tuple[str, Tuple[str, ...]], ...], parent: Any,
     ) -> None:
         help_window = self.open_modal_window(tk, title, parent=parent)
+        # Help that was opened from the main window and minimized is shown again as it is.
+        if help_window is None:
+            return
         body = tk.Frame(help_window)
         body.pack(fill="both", expand=True, padx=12, pady=(12, 0))
         text = tk.Text(body, wrap="word", width=84, height=30, padx=8, pady=6,
@@ -1807,18 +1910,160 @@ class PyTradeViz:
         if not self.canvas.winfo_exists():
             return
         # The call belongs to the main window, so that it can still be made when the parent is
-        # closed together with this window.
-        self.window.after_idle(lambda: parent.grab_set() if parent.winfo_exists() else None)
+        # closed together with this window. A minimized parent takes the grab when it is shown.
+        self.window.after_idle(
+            lambda: parent.grab_set() if parent.winfo_exists() and parent.winfo_viewable() else None)
 
-    def open_modal_window(self, tk: ModuleType, title: str, parent: Any = None) -> Any:
+    def open_modal_window(
+        self, tk: ModuleType, title: str, parent: Any = None, minimizable: bool = True,
+    ) -> Any:
+        """Open a window that keeps the mouse and the keyboard to itself while it is shown.
+
+        A window opened from the main window is shown again instead when it is minimized, and
+        None is returned because nothing is left to build.
+        """
         # Selecting a menu item already unposts the menus; this opens the modal dialog.
         parent = self.window if parent is None else parent
+        if parent is self.window:
+            for root in self.minimized:
+                if root.title() == title:
+                    self.restore_windows(root)
+                    return None
         window = tk.Toplevel(parent)
         window.title(title)
         window.transient(parent)
-        window.wait_visibility()
-        window.grab_set()
+        if minimizable:
+            self.add_minimize_button(tk, window)
+        if parent is not self.window and self.stack_root(parent) in self.minimized:
+            # The parent was minimized before this window could open, so the two are shown
+            # together later.
+            window.withdraw()
+        else:
+            window.wait_visibility()
+            window.grab_set()
         return window
+
+    def add_minimize_button(self, tk: ModuleType, window: Any) -> None:
+        # A row of its own above what the window shows, so that the button has one place.
+        header = tk.Frame(window)
+        header.pack(fill="x", padx=12, pady=(8, 0))
+        tk.Button(
+            header, text="Minimize", width=8, command=lambda: self.minimize_windows(window),
+        ).pack(side="right")
+        # However the window is closed, this row goes with it.
+        header.bind("<Destroy>", lambda _event: self.forget_minimized(window))
+        # A click outside a window that holds the grab is reported to that window.
+        window.bind("<ButtonPress-1>", lambda event: self.note_press(event, window), add="+")
+        window.bind(
+            "<ButtonRelease-1>", lambda event: self.minimize_on_click_outside(event, window), add="+")
+
+    def stack_root(self, window: Any) -> Any:
+        """The window opened from the main window that ``window`` is, or was opened under."""
+        while window.master is not self.window:
+            window = window.master
+        return window
+
+    def window_stack(self, root: Any) -> List[Any]:
+        """``root`` followed by the windows opened under it. The one in use is the last."""
+        stack = [root]
+        for window in stack:
+            stack.extend(child for child in window.winfo_children() if isinstance(child, tk.Toplevel))
+        return stack
+
+    def minimize_windows(self, window: Any) -> None:
+        """Hide a window with the others of its stack, and leave a button that shows them again."""
+        root = self.stack_root(window)
+        stack = self.window_stack(root)
+        # A window that is still on its way to the screen is being waited for, so the stack
+        # stays until it is there.
+        if not all(member.winfo_viewable() for member in stack):
+            return
+        for member in reversed(stack):
+            member.grab_release()
+            # A window that is shown again is placed as a new one is, so it is told to come
+            # back where it is now.
+            place = member.geometry().lstrip("0123456789x")
+            member.withdraw()
+            member.geometry(place)
+        button = ttk.Button(
+            self.window_bar, text=root.title(), width=0,
+            command=lambda: self.restore_windows(root),
+        )
+        button.pack(side="left", padx=(0, 4))
+        self.minimized[root] = button
+        self.update_window_bar()
+        self.window.focus_lastfor().focus_set()
+
+    def restore_windows(self, root: Any) -> None:
+        """Show a minimized window again with the others of its stack, modal as before."""
+        self.minimized.pop(root).destroy()
+        self.update_window_bar()
+        stack = self.window_stack(root)
+        for member in stack:
+            member.deiconify()
+        stack[-1].wait_visibility()
+        stack[-1].grab_set()
+        # The keyboard goes to the widget that had it, or to one that asked for it since.
+        keyboard = self._keyboard_wanted.pop(stack[-1], None)
+        (stack[-1].focus_lastfor() if keyboard is None else keyboard).focus_set()
+
+    def give_keyboard(self, widget: Any) -> None:
+        """Give a widget the keyboard, once its window is shown again if that window is minimized."""
+        window = widget.winfo_toplevel()
+        if window.winfo_viewable():
+            widget.focus_set()
+        else:
+            # Tk does not keep what it is asked for a window that is not on the screen.
+            self._keyboard_wanted[window] = widget
+
+    def forget_minimized(self, window: Any) -> None:
+        self._keyboard_wanted.pop(window, None)
+        button = self.minimized.pop(window, None)
+        # The chart is gone before this window when the whole program is closing, and so is
+        # the button.
+        if button is not None and self.canvas.winfo_exists():
+            button.destroy()
+            self.update_window_bar()
+
+    def when_shown_again(self, window: Any, refresh: Callable[[], None]) -> None:
+        """Call ``refresh`` each time that ``window`` is shown after it was minimized."""
+        # The widgets inside the window report to it that they are shown as well.
+        window.bind("<Map>", lambda event: refresh() if event.widget is window else None, add="+")
+
+    def covers(self, widget: Any, x: int, y: int) -> bool:
+        """Whether a widget that is shown lies over a point of the screen."""
+        left, top = widget.winfo_rootx(), widget.winfo_rooty()
+        return bool(
+            widget.winfo_viewable()
+            and left <= x < left + widget.winfo_width() and top <= y < top + widget.winfo_height())
+
+    def outside_stack(self, event: Any, window: Any) -> bool:
+        """Whether a mouse event that ``window`` received happened off every window of its stack."""
+        # The window itself is given as the widget of an event outside it. Where the event
+        # happened is told from the places of the windows, because asking Tk for the widget
+        # there depends on what else the screen shows at that point.
+        if event.widget is not window:
+            return False
+        stack = self.window_stack(self.stack_root(window))
+        return not any(self.covers(member, event.x_root, event.y_root) for member in stack)
+
+    def note_press(self, event: Any, window: Any) -> None:
+        self._pressed_outside = self.outside_stack(event, window)
+
+    def minimize_on_click_outside(self, event: Any, window: Any) -> None:
+        # Both ends of the click are off the windows of the stack. A drag that starts or ends
+        # on one of them is left alone.
+        pressed, self._pressed_outside = self._pressed_outside, False
+        if not pressed or not self.outside_stack(event, window):
+            return
+        # A click on the button of another minimized window goes on to show that window. The
+        # tabs lie over the buttons that reach them.
+        x, y = event.x_root, event.y_root
+        other = None if self.covers(self.timeframe_bar, x, y) else next(
+            (root for root, button in self.minimized.items() if self.covers(button, x, y)), None)
+        self.minimize_windows(window)
+        if other is not None and self.stack_root(window) in self.minimized:
+            self.restore_windows(other)
 
     def initialize_charts(self, price_data: Optional[List[List[Any]]] = None) -> None:
 
@@ -3088,13 +3333,13 @@ class PyTradeViz:
 
     def open_trend_window(self, tk: ModuleType) -> None:
         window = self.open_modal_window(tk, "Trend Identification")
-        self.build_trend_content(tk, window)
+        if window is not None:
+            self.build_trend_content(tk, window)
 
     def build_trend_content(self, tk: ModuleType, window: Any) -> None:
         # Edits are staged in these variables and only applied by the Apply button.
         applied = self.trend_applied
         defaults = default_trend_settings()
-        has_volume = self.trend_volumes() is not None
         staged: Dict[str, Any] = {
             "enabled": tk.BooleanVar(window, value=applied["enabled"]),
             "include_volume": tk.BooleanVar(window, value=applied["include_volume"]),
@@ -3103,13 +3348,21 @@ class PyTradeViz:
         display.pack(fill="x", padx=12, pady=(12, 0))
         tk.Checkbutton(display, text="Show trend shading", variable=staged["enabled"]).grid(
             row=0, column=0, sticky="w")
-        tk.Checkbutton(
-            display, text="Include volume", variable=staged["include_volume"],
-            state="normal" if has_volume else "disabled",
-        ).grid(row=1, column=0, sticky="w")
-        if not has_volume:
-            tk.Label(display, text="The loaded data has no volume column.", fg="gray").grid(
-                row=1, column=1, sticky="w", padx=(12, 0))
+        volume_box = tk.Checkbutton(display, text="Include volume", variable=staged["include_volume"])
+        volume_box.grid(row=1, column=0, sticky="w")
+
+        def show_volume_choice() -> None:
+            has_volume = self.trend_volumes() is not None
+            volume_box.configure(state="normal" if has_volume else "disabled")
+            for note in display.grid_slaves(row=1, column=1):
+                note.destroy()
+            if not has_volume:
+                tk.Label(display, text="The loaded data has no volume column.", fg="gray").grid(
+                    row=1, column=1, sticky="w", padx=(12, 0))
+
+        show_volume_choice()
+        # The data file can change while the window is minimized.
+        self.when_shown_again(window, show_volume_choice)
         settings = tk.LabelFrame(window, text="Trend settings", padx=10, pady=6)
         settings.pack(fill="x", padx=12, pady=(12, 0))
         for row, (key, label, _kind, _low, _high) in enumerate(TREND_SETTING_FIELDS):

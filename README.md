@@ -182,46 +182,74 @@ The menu bar has five items:
   measurement on the chart. Closing the results, with *Close* or from the title bar, clears
   the highlights and empties the boxes of the Positional window for the next order.
   *Indicator Based* opens the Indicator Based Strategy window, which backtests a strategy made
-  of rules. Each rule is one row: an indicator (*RSI* or *ADX*), its *Period*, a condition
-  (*crosses above*, *crosses below*, *is above* or *is below*) and a level, as in RSI(7)
-  crosses below 30. The rows under *Buy when all of these are true* must all be true on one
-  candle to buy, and any one row under *Sell when any of these is true* sells. The window
-  starts with RSI(7) crosses below 30 to buy on and RSI(7) crosses above 70 to sell on.
+  of rules. Each rule is one row, which starts with a drop-down of the indicators: *RSI*, *ADX*
+  and *Bollinger*. An RSI or ADX row has the *Period* of the indicator, a condition (*crosses
+  above*, *crosses below*, *is above* or *is below*) and a level, as in RSI(7) crosses below
+  30. A Bollinger row compares the close with a Bollinger band, where the others compare an
+  indicator with a level. It has the *Period* and the *Std. dev.* of the bands, then *Close*,
+  the condition and a drop-down with *upper band* and *lower band*, as in Bollinger(20, 2):
+  close crosses below lower band. Every row ends with a box between *for* and *candles*, for
+  how many candles in a row the rule has to be true on. It starts at 1, which is the rule on
+  its own. A higher number filters out signals that do not last, as in RSI(7) crosses below 30
+  for 3 candles. The window widens for a Bollinger row, which is the longer one. The rows
+  under *Buy when all of these are true* must all be true on one candle to buy, and any one
+  row under *Sell when any of these is true* sells. The window starts with RSI(7) crosses
+  below 30 to buy on and RSI(7) crosses above 70 to sell on.
   *Add buy rule* and *Add sell rule* add a row, up to six on each side, and *Remove* takes a
   row away, though the only buy rule stays. A new row is for an indicator that its side does
   not use yet. Choosing another indicator in a row fills in the usual rule of that indicator,
-  which for ADX is ADX(14) is below 25 to buy on and ADX(14) crosses above 25 to sell on.
+  which is for 1 candle. For ADX that is ADX(14) is below 25 to buy on and ADX(14) crosses
+  above 25 to sell on. For Bollinger it is the bands of 20 candles and 2 standard deviations,
+  with close crosses below lower band to buy on and close crosses above upper band to sell on.
   *ROI (%)* and *Stop loss (%)*, under *Also sell at (optional)*, give every trade a target
   price and a stop price, worked out from the price that trade was bought at. Leave them empty
-  to sell on the rules alone. The period boxes take digits only, and the level, ROI and stop
-  loss boxes take digits with at most one decimal point. *Test* needs a period from 2 to 9999
-  and a level from 0 to 100 in every rule, an ROI above 0 and a stop loss above 0 and below
-  100 when they are set, and something to sell on: a sell rule, an ROI or a stop loss. It
-  names the rule or the box to correct otherwise. *Cancel* closes the window and tests nothing.
+  to sell on the rules alone. The period and candles boxes take digits only, and the level,
+  *Std. dev.*, ROI and stop loss boxes take digits with at most one decimal point. *Test*
+  needs a period from 2 to 9999 and from 1 to 9999 candles in every rule, with a level from 0
+  to 100 or a *Std. dev.* from 0.1 to 10, an ROI above 0 and a stop loss above 0 and below 100
+  when they are set, and something to sell on: a sell rule, an ROI or a stop loss. It names
+  the rule or the box to correct otherwise. *Cancel* closes the window and tests nothing.
   *Test* first loads the rest of the file, which can take a few seconds, so that the whole
   file is tested on any tab. If part of the file cannot be read, the error is shown and the
   candles before it are tested. It then walks the daily candles from the first to the last.
   The rules are read when a candle closes and acted on when the next candle opens, so trades
   are bought and sold by the rules at opening prices. *is above* and *is below* are true on
   every candle that closes with the indicator beyond the level. The crossings are true only
-  on the candle that takes it there, from the level or from the other side of it. A rule is
-  never true on the first candles of the file, where its indicator has too few candles behind
-  it. A trade with a target or a stop is also sold by the candle that reaches one of them, at
-  that price, or at the open when the candle opens beyond it. The candle the trade was bought
-  on can do so too. A candle that reaches both is taken to hit the stop first, unless it opens
-  at or above the target. One position is held at a time, and there are no fees and no short
-  sales. A candle that sells does not buy at the same open. Rules that are true on the last
-  candle are not acted on, because no candle follows it.
+  on the candle that takes it there, from the level or from the other side of it. A rule for
+  more than 1 candle needs that many candles in a row to close with the indicator beyond the
+  level, and it is acted on at the open after the last of them. *is above* and *is below* are
+  then true on the last of those candles and on every candle after it for as long as the
+  indicator stays there. A crossing is true only on the last of them, and the first of them
+  has to be the candle that crossed: RSI(7) crosses below 30 for 3 candles is true on the
+  third close in a row with RSI(7) under 30, counted from the close that took it there. The
+  candles are counted on the chart whether or not a trade is held, so candles from before a
+  trade was bought count towards its sell rules. Buy rules have to be true on the same candle,
+  so use *is above* or *is below* for a rule that should stay true after its candles. A
+  Bollinger rule is read the same way, with the close in place of the indicator and the band
+  in place of the level. The band moves, so each close is compared with the band of its own
+  candle. Only closes are compared: a candle whose low or high reaches a band does not count
+  unless it also closes beyond it, and the trade is still made at the next open, not at the
+  price of the band. The bands are worked out as the Bollinger Bands of the chart are, but
+  from the *Period* and the *Std. dev.* of the row and not from the settings of the Bollinger
+  Bands window. With the same two numbers they are the bands that the Daily tab draws. A rule
+  is never true on the first candles of the file, where its indicator has too few candles
+  behind it. A trade with a target or a stop is also sold by the candle that reaches one of
+  them, at that price, or at the open when the candle opens beyond it. The candle the trade
+  was bought on can do so too. A candle that reaches both is taken to hit the stop first,
+  unless it opens at or above the target. One position is held at a time, and there are no
+  fees and no short sales. A candle that sells does not buy at the same open. Rules that are
+  true on the last candle are not acted on, because no candle follows it.
   The results open in a second window. The first line gives the number of trades, how many of
   them made a profit, and the candles and dates tested. The second gives the total return of
   the trades, where each trade puts in everything the one before it left, beside what buying
   at the first open and holding to the last close made. The list has the columns of the
   Positional results and two more: *Return*, what the trade made as a percentage of its entry
   price, and *Sold by*, which names the first sell rule that was true, *ROI* or *Stop loss*.
-  A position still held on the last candle is listed as *Still open* and valued at the last
-  close. The chart shows the trades as it does for a Positional test: their candles are
-  highlighted on any tab, the first trade is selected, and selecting a trade scrolls the chart
-  to it. Closing the results clears the highlights and keeps the rules in the window for
+  A rule for more than 1 candle is named with its candles, as in RSI(7) crosses above 70 for 2
+  candles. A position still held on the last candle is listed as *Still open* and valued at
+  the last close. The chart shows the trades as it does for a Positional test: their candles
+  are highlighted on any tab, the first trade is selected, and selecting a trade scrolls the
+  chart to it. Closing the results clears the highlights and keeps the rules in the window for
   another test. The strategy that was last tested is shown again the next time the window is
   opened, and *Cancel* drops any changes made since.
 - **Data**: lists the labeled selections with their candle counts. *Export to JSON*
@@ -234,6 +262,33 @@ The menu bar has five items:
   all drawings are cleared, and RSI is shown on the canvas. This applies to every timeframe
   tab. The loaded data, zoom level, labeled selections and scroll position are kept.
   *Cancel* closes the confirmation without changes.
+
+A window that the menus open keeps the mouse and the keyboard to itself while it is shown, so
+the chart behind it cannot be used. To put such a window aside, press the *Minimize* button
+at its top right. The results of a strategy test and the *Help* windows have one too.
+*Minimize* hides the window and leaves a button with its name above the chart, at the left of
+the row of tabs. A results list or a *Help* window is hidden and shown together with the
+window it was opened from, under the name of that window. The chart, the tabs and the menus
+can then be used as usual. A click on the main window while a window is shown does the same
+as *Minimize*. That click only puts the window away, and is not passed on to the chart or
+the button it landed on. To show a window again, click its button above the chart or choose
+its menu item again. It comes back where it was, with what was typed into it. Any number of
+windows can be minimized, and one is shown at a time: a click on the button of another one
+puts the window in use away first. About four buttons fit beside the tabs at the starting
+width of the main window, and more when their names are short or the window is wider. A
+button that does not fit is covered by the tabs or cut off, and its window is still shown by
+its menu item. The *Reset* confirmation, the *About* window and the prompt for the label of a
+selection have no *Minimize*. They are closed in a moment, and stay in front until then.
+
+A minimized window stays as you left it. Settings typed into it are kept, and *Apply* sets
+them on the tab that is shown when it is pressed. The trades of a minimized results list stay
+highlighted, on every tab and after more candles are loaded with **>** or **>>>**, and the
+list keeps the trades of the candles that were tested. With the lists of both strategies
+open, the trades of the one that was opened or shown last are highlighted. The *Data*,
+*Support and Resistance* and *Trend Identification* windows are brought up to date when they
+are shown again, for example with the selections that were labeled in the meantime. Opening
+or closing a data file closes the results lists, whose trades were found in the candles that
+are gone, and leaves the other minimized windows.
 
 Export files use the layouts in `data/export-format.txt`, with these differences:
 the JSON is valid JSON (`{"label": {"label_candle_0": {...}}}`), the XML label is

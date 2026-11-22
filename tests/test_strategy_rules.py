@@ -1,30 +1,54 @@
 from __future__ import annotations
 
 import math
+import statistics
 import unittest
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from unittest import mock
 
-from indicators import adx_components
+from indicators import BOLLINGER_SETTING_FIELDS, Indicators, adx_components
 from strategy_rules import (
-    ADX, BUY, CONDITIONS, CROSSES_ABOVE, CROSSES_BELOW, DEFAULT_RULES, INDICATORS, IS_ABOVE,
-    IS_BELOW, RSI, SELL, Rule, RuleStrategy, RuleTrade, buy_and_hold_return, compound_return,
-    condition_signals, default_strategy, indicator_values, is_period_text, next_default_rule,
-    percent_text, rule_strategy, rule_text, rule_trades, trade_returns,
+    ADX, BANDS, BOLLINGER, BUY, CONDITIONS, CROSSES_ABOVE, CROSSES_BELOW, DEFAULT_RULES, INDICATORS,
+    IS_ABOVE, IS_BELOW, LOWER_BAND, MAX_MULTIPLIER, MIN_MULTIPLIER, RSI, SELL, UPPER_BAND, AnyRule,
+    BandRule, Rule, RuleStrategy, RuleTrade, band_signals, band_values, buy_and_hold_return,
+    compound_return, condition_signals, default_strategy, indicator_values, is_period_text,
+    next_default_rule, percent_text, rule_strategy, rule_text, rule_trades, trade_returns,
 )
 from test_strategies import NOT_NUMBER_TEXT, candles, load_price_rows
 from trend import wilder_rsi
 
 # The rows of the window as it opens: buy on RSI(7) falling below 30, sell on it rising above 70.
-BUY_ROW = ("RSI", "7", "crosses below", "30")
-SELL_ROW = ("RSI", "7", "crosses above", "70")
+# A row ends with how many candles in a row its rule asks for, which is one.
+BUY_ROW = ("RSI", "7", "crosses below", "30", "1")
+SELL_ROW = ("RSI", "7", "crosses above", "70", "1")
 BUY_RULE = Rule(RSI, 7, CROSSES_BELOW, Decimal(30))
 SELL_RULE = Rule(RSI, 7, CROSSES_ABOVE, Decimal(70))
 SOLD_BY_RULE = "RSI(7) crosses above 70"
 
+# The row that Bollinger brings on each side: buy on a close under the lower band, sell on a
+# close over the upper band.
+BAND_BUY_ROW = ("Bollinger", "20", "2", "crosses below", "lower band", "1")
+BAND_SELL_ROW = ("Bollinger", "20", "2", "crosses above", "upper band", "1")
+BAND_BUY_RULE = BandRule(20, Decimal(2), CROSSES_BELOW, LOWER_BAND)
+BAND_SELL_RULE = BandRule(20, Decimal(2), CROSSES_ABOVE, UPPER_BAND)
+SOLD_BY_BAND_RULE = "Bollinger(20, 2): close crosses above upper band"
+
 # A candle that opens at 100 and reaches neither a stop 5% under it nor a target 10% over it.
 QUIET = (100, 101, 99, 100)
+
+
+def row_of(rule: AnyRule) -> Tuple[str, ...]:
+    """The row of the window that holds the rule."""
+    count = str(rule.candles)
+    if isinstance(rule, BandRule):
+        return (rule.indicator, str(rule.period), str(rule.multiplier), rule.condition, rule.band, count)
+    return (rule.indicator, str(rule.period), rule.condition, str(rule.level), count)
+
+
+def closing_at(*prices: float) -> List[List[Any]]:
+    """Candles that close at the given prices, each after opening a quarter under its close."""
+    return candles(*((price - 0.25, price + 0.5, price - 0.5, price) for price in prices))
 
 
 def opening_at(*prices: float) -> List[List[Any]]:
@@ -61,6 +85,35 @@ class RuleTextTests(unittest.TestCase):
         for level, text in (("30.0", "30"), ("29.50", "29.5"), ("0", "0"), ("100", "100"), (".5", "0.5")):
             self.assertEqual(rule_text(Rule(RSI, 7, IS_BELOW, Decimal(level))), f"RSI(7) is below {text}")
 
+    def test_a_bollinger_rule_reads_as_its_bands_and_what_the_close_does(self) -> None:
+        self.assertEqual(rule_text(BAND_BUY_RULE), "Bollinger(20, 2): close crosses below lower band")
+        self.assertEqual(rule_text(BAND_SELL_RULE), SOLD_BY_BAND_RULE)
+        self.assertEqual(
+            rule_text(BandRule(10, Decimal("1.50"), IS_ABOVE, LOWER_BAND)),
+            "Bollinger(10, 1.5): close is above lower band",
+        )
+
+    def test_a_rule_for_several_candles_says_how_many(self) -> None:
+        self.assertEqual(
+            rule_text(Rule(RSI, 7, CROSSES_BELOW, Decimal(30), 3)), "RSI(7) crosses below 30 for 3 candles")
+        self.assertEqual(
+            rule_text(Rule(ADX, 14, IS_ABOVE, Decimal("22.50"), 2)), "ADX(14) is above 22.5 for 2 candles")
+        self.assertEqual(
+            rule_text(BandRule(20, Decimal(2), CROSSES_ABOVE, UPPER_BAND, 3)),
+            "Bollinger(20, 2): close crosses above upper band for 3 candles",
+        )
+        self.assertEqual(
+            rule_text(BandRule(10, Decimal("1.5"), IS_BELOW, LOWER_BAND, 9999)),
+            "Bollinger(10, 1.5): close is below lower band for 9999 candles",
+        )
+
+    def test_a_rule_for_one_candle_is_the_rule_on_its_own(self) -> None:
+        self.assertEqual(rule_text(Rule(RSI, 7, CROSSES_BELOW, Decimal(30), 1)), "RSI(7) crosses below 30")
+        self.assertEqual(rule_text(BandRule(20, Decimal(2), CROSSES_ABOVE, UPPER_BAND, 1)), SOLD_BY_BAND_RULE)
+        # A rule is for one candle when it does not say.
+        self.assertEqual(Rule(RSI, 7, CROSSES_BELOW, Decimal(30), 1), BUY_RULE)
+        self.assertEqual(BandRule(20, Decimal(2), CROSSES_ABOVE, UPPER_BAND, 1), BAND_SELL_RULE)
+
 
 class DefaultRuleTests(unittest.TestCase):
     def test_the_first_strategy_buys_on_oversold_rsi_and_sells_on_overbought_rsi(self) -> None:
@@ -69,7 +122,7 @@ class DefaultRuleTests(unittest.TestCase):
     def test_every_side_and_indicator_has_a_rule_that_can_be_tested(self) -> None:
         self.assertEqual(set(DEFAULT_RULES), {(side, name) for side in (BUY, SELL) for name in INDICATORS})
         for (side, name), rule in DEFAULT_RULES.items():
-            row = (rule.indicator, str(rule.period), rule.condition, str(rule.level))
+            row = row_of(rule)
             self.assertEqual(rule.indicator, name)
             self.assertEqual(rule_strategy([row], [row], "", "").buy_rules, (rule,), (side, name))
 
@@ -77,15 +130,26 @@ class DefaultRuleTests(unittest.TestCase):
         self.assertEqual(DEFAULT_RULES[BUY, ADX], Rule(ADX, 14, IS_BELOW, Decimal(25)))
         self.assertEqual(DEFAULT_RULES[SELL, ADX], Rule(ADX, 14, CROSSES_ABOVE, Decimal(25)))
 
+    def test_bollinger_buys_under_the_lower_band_and_sells_over_the_upper_band(self) -> None:
+        self.assertEqual(DEFAULT_RULES[BUY, BOLLINGER], BAND_BUY_RULE)
+        self.assertEqual(DEFAULT_RULES[SELL, BOLLINGER], BAND_SELL_RULE)
+        self.assertEqual((row_of(BAND_BUY_RULE), row_of(BAND_SELL_RULE)), (BAND_BUY_ROW, BAND_SELL_ROW))
+
+    def test_the_rule_of_a_new_row_is_for_one_candle(self) -> None:
+        self.assertEqual({rule.candles for rule in DEFAULT_RULES.values()}, {1})
+
     def test_a_new_row_is_for_the_first_indicator_the_side_does_not_use(self) -> None:
         self.assertEqual(next_default_rule(BUY, []), BUY_RULE)
         self.assertEqual(next_default_rule(BUY, [RSI]), DEFAULT_RULES[BUY, ADX])
         self.assertEqual(next_default_rule(SELL, [RSI, RSI]), DEFAULT_RULES[SELL, ADX])
         self.assertEqual(next_default_rule(SELL, [ADX]), SELL_RULE)
+        self.assertEqual(next_default_rule(BUY, [RSI, ADX]), BAND_BUY_RULE)
+        self.assertEqual(next_default_rule(SELL, [ADX, RSI, ADX]), BAND_SELL_RULE)
+        self.assertEqual(next_default_rule(SELL, [BOLLINGER, RSI]), DEFAULT_RULES[SELL, ADX])
 
     def test_a_new_row_is_for_rsi_when_the_side_uses_every_indicator(self) -> None:
-        self.assertEqual(next_default_rule(BUY, [RSI, ADX]), BUY_RULE)
-        self.assertEqual(next_default_rule(SELL, [ADX, RSI, ADX]), SELL_RULE)
+        self.assertEqual(next_default_rule(BUY, [RSI, ADX, BOLLINGER]), BUY_RULE)
+        self.assertEqual(next_default_rule(SELL, [BOLLINGER, ADX, RSI, ADX]), SELL_RULE)
 
 
 class RuleStrategyTests(unittest.TestCase):
@@ -99,8 +163,8 @@ class RuleStrategyTests(unittest.TestCase):
 
     def test_every_row_is_one_rule_in_the_order_of_the_rows(self) -> None:
         strategy = rule_strategy(
-            [BUY_ROW, ("ADX", "14", "is below", "25")],
-            [SELL_ROW, ("ADX", "20", "crosses above", "22.5"), ("RSI", "14", "is above", "80")],
+            [BUY_ROW, ("ADX", "14", "is below", "25", "1")],
+            [SELL_ROW, ("ADX", "20", "crosses above", "22.5", "1"), ("RSI", "14", "is above", "80", "1")],
             "", "",
         )
         self.assertEqual(strategy.buy_rules, (BUY_RULE, Rule(ADX, 14, IS_BELOW, Decimal(25))))
@@ -119,36 +183,119 @@ class RuleStrategyTests(unittest.TestCase):
 
     def test_a_period_is_a_whole_number_from_2_to_9999(self) -> None:
         for period in ("2", "007", "9999"):
-            rule = rule_strategy([("RSI", period, "is below", "30")], [SELL_ROW], "", "").buy_rules[0]
-            self.assertEqual(rule.period, int(period))
+            row = ("RSI", period, "is below", "30", "1")
+            self.assertEqual(rule_strategy([row], [SELL_ROW], "", "").buy_rules[0].period, int(period))
         for period in ("", "0", "1", "10000", "7.0", "7.", "-7", "+7", " 7", "seven"):
             self.assert_refused(
                 "Buy rule 1: Period must be a whole number from 2 to 9999.",
-                [("RSI", period, "is below", "30")], [SELL_ROW], "", "")
+                [("RSI", period, "is below", "30", "1")], [SELL_ROW], "", "")
 
     def test_a_level_is_a_number_from_0_to_100(self) -> None:
         for level in ("0", "0.0", "100", "100.00", "29.5", ".5"):
-            rule = rule_strategy([BUY_ROW], [("ADX", "14", "is above", level)], "", "").sell_rules[0]
-            self.assertEqual(rule.level, Decimal(level))
+            row = ("ADX", "14", "is above", level, "1")
+            self.assertEqual(rule_strategy([BUY_ROW], [row], "", "").sell_rules[0].level, Decimal(level))
         for level in ("", ".", "-1", "-0.01", "100.01", "101", "1e1", "thirty"):
             self.assert_refused(
                 "Sell rule 1: Level must be a number from 0 to 100.",
-                [BUY_ROW], [("ADX", "14", "is above", level)], "", "")
+                [BUY_ROW], [("ADX", "14", "is above", level, "1")], "", "")
 
     def test_the_indicator_and_the_condition_are_ones_the_window_offers(self) -> None:
-        for indicator in INDICATORS:
+        self.assertEqual(INDICATORS, (RSI, ADX, BOLLINGER))
+        for indicator in (RSI, ADX):
             for condition in CONDITIONS:
-                rule = rule_strategy([(indicator, "7", condition, "50")], [SELL_ROW], "", "").buy_rules[0]
+                row = (indicator, "7", condition, "50", "1")
+                rule = rule_strategy([row], [SELL_ROW], "", "").buy_rules[0]
                 self.assertEqual((rule.indicator, rule.condition), (indicator, condition))
         self.assert_refused(
-            "Buy rule 1: The indicator must be RSI or ADX.",
-            [("MACD", "7", "is below", "30")], [SELL_ROW], "", "")
+            "Buy rule 1: The indicator must be RSI, ADX or Bollinger.",
+            [("MACD", "7", "is below", "30", "1")], [SELL_ROW], "", "")
         self.assert_refused(
             "Buy rule 1: The condition must be crosses above, crosses below, is above or is below.",
-            [("RSI", "7", "equals", "30")], [SELL_ROW], "", "")
+            [("RSI", "7", "equals", "30", "1")], [SELL_ROW], "", "")
+
+    def test_a_row_can_ask_for_several_candles_in_a_row(self) -> None:
+        strategy = rule_strategy(
+            [("RSI", "7", "crosses below", "30", "3"), ("ADX", "14", "is below", "25", "10")],
+            [("Bollinger", "20", "2", "is above", "upper band", "2")], "", "",
+        )
+        self.assertEqual(strategy.buy_rules, (
+            Rule(RSI, 7, CROSSES_BELOW, Decimal(30), 3), Rule(ADX, 14, IS_BELOW, Decimal(25), 10),
+        ))
+        self.assertEqual(strategy.sell_rules, (BandRule(20, Decimal(2), IS_ABOVE, UPPER_BAND, 2),))
+
+    def test_candles_are_a_whole_number_from_1_to_9999(self) -> None:
+        # The row of each kind without its last text, which is the candles.
+        for start in (BUY_ROW[:-1], BAND_BUY_ROW[:-1]):
+            for count in ("1", "3", "007", "9999"):
+                rule = rule_strategy([start + (count,)], [SELL_ROW], "", "").buy_rules[0]
+                self.assertEqual(rule.candles, int(count), start)
+            for count in ("", "0", "0000", "10000", "2.5", "3.", "-1", "+3", " 3", "three"):
+                self.assert_refused(
+                    "Buy rule 1: Candles must be a whole number from 1 to 9999.",
+                    [start + (count,)], [SELL_ROW], "", "")
+        self.assert_refused(
+            "Sell rule 2: Candles must be a whole number from 1 to 9999.",
+            [BUY_ROW], [SELL_ROW, BAND_SELL_ROW[:-1] + ("0",)], "", "")
+
+    def test_a_bollinger_row_is_a_rule_for_the_close_and_a_band(self) -> None:
+        strategy = rule_strategy([BAND_BUY_ROW], [BAND_SELL_ROW], "", "")
+        self.assertEqual(strategy, RuleStrategy((BAND_BUY_RULE,), (BAND_SELL_RULE,), None, None))
+        self.assertEqual(BANDS, ("upper band", "lower band"))
+        for condition in CONDITIONS:
+            for band in BANDS:
+                row = ("Bollinger", "10", "2.5", condition, band, "1")
+                self.assertEqual(
+                    rule_strategy([row], [SELL_ROW], "", "").buy_rules,
+                    (BandRule(10, Decimal("2.5"), condition, band),))
+        # Bollinger rows stand among the rows of the other indicators.
+        strategy = rule_strategy([BUY_ROW, BAND_BUY_ROW], [BAND_SELL_ROW, SELL_ROW], "", "")
+        self.assertEqual(strategy.buy_rules, (BUY_RULE, BAND_BUY_RULE))
+        self.assertEqual(strategy.sell_rules, (BAND_SELL_RULE, SELL_RULE))
+
+    def test_a_multiplier_is_a_number_from_a_tenth_to_10(self) -> None:
+        for multiplier in ("0.1", ".1", "0.10", "1", "2", "2.5", "10", "10.0"):
+            row = ("Bollinger", "20", multiplier, "is below", "lower band", "1")
+            rule = rule_strategy([row], [SELL_ROW], "", "").buy_rules[0]
+            self.assertEqual(rule.multiplier, Decimal(multiplier))
+        for multiplier in ("", ".", "0", "0.09", "0.099", "10.01", "11", "-2", "1e1", "two"):
+            self.assert_refused(
+                "Buy rule 1: Std. dev. must be a number from 0.1 to 10.",
+                [("Bollinger", "20", multiplier, "is below", "lower band", "1")], [SELL_ROW], "", "")
+
+    def test_the_multiplier_has_the_range_of_the_chart_bands(self) -> None:
+        ((_, _, _, low, high),) = [field for field in BOLLINGER_SETTING_FIELDS if field[0] == "multiplier"]
+        self.assertEqual((float(MIN_MULTIPLIER), float(MAX_MULTIPLIER)), (low, high))
+
+    def test_the_band_and_the_condition_of_a_bollinger_row_are_ones_the_window_offers(self) -> None:
+        for band in ("middle band", "upper", "", "30"):
+            self.assert_refused(
+                "Sell rule 1: The band must be upper band or lower band.",
+                [BUY_ROW], [("Bollinger", "20", "2", "crosses above", band, "1")], "", "")
+        self.assert_refused(
+            "Sell rule 1: The condition must be crosses above, crosses below, is above or is below.",
+            [BUY_ROW], [("Bollinger", "20", "2", "touches", "upper band", "1")], "", "")
+
+    def test_a_bollinger_row_is_read_from_left_to_right(self) -> None:
+        for period in ("", "1", "10000", "2.5"):
+            self.assert_refused(
+                "Buy rule 2: Period must be a whole number from 2 to 9999.",
+                [BUY_ROW, ("Bollinger", period, "", "touches", "middle band", "")], [SELL_ROW], "", "")
+        self.assert_refused(
+            "Buy rule 1: Std. dev. must be a number from 0.1 to 10.",
+            [("Bollinger", "2", "", "touches", "middle band", "")], [SELL_ROW], "", "")
+        self.assert_refused(
+            "Buy rule 1: The condition must be crosses above, crosses below, is above or is below.",
+            [("Bollinger", "9999", "2", "touches", "middle band", "")], [SELL_ROW], "", "")
+        self.assert_refused(
+            "Buy rule 1: The band must be upper band or lower band.",
+            [("Bollinger", "9999", "2", "is above", "middle band", "")], [SELL_ROW], "", "")
+        # The candles box is the last of the row.
+        self.assert_refused(
+            "Buy rule 1: Candles must be a whole number from 1 to 9999.",
+            [("Bollinger", "9999", "2", "is above", "upper band", "")], [SELL_ROW], "", "")
 
     def test_the_row_at_fault_is_named_by_its_side_and_number(self) -> None:
-        bad = ("RSI", "7", "is above", "")
+        bad = ("RSI", "7", "is above", "", "1")
         self.assert_refused(
             "Buy rule 2: Level must be a number from 0 to 100.", [BUY_ROW, bad], [SELL_ROW], "", "")
         self.assert_refused(
@@ -157,7 +304,14 @@ class RuleStrategyTests(unittest.TestCase):
         # The buy rules are read first, and a row is read from left to right.
         self.assert_refused(
             "Buy rule 1: Period must be a whole number from 2 to 9999.",
-            [("RSI", "", "is above", "")], [bad], "", "")
+            [("RSI", "", "is above", "", "")], [bad], "", "")
+        self.assert_refused(
+            "Buy rule 1: Level must be a number from 0 to 100.",
+            [("RSI", "7", "is above", "", "")], [bad], "", "")
+        # The candles box is the last of the row.
+        self.assert_refused(
+            "Buy rule 1: Candles must be a whole number from 1 to 9999.",
+            [("RSI", "7", "is above", "70", "")], [bad], "", "")
 
     def test_a_strategy_needs_a_buy_rule(self) -> None:
         self.assert_refused("A strategy needs at least one buy rule.", [], [SELL_ROW], "10", "5")
@@ -238,6 +392,119 @@ class ConditionSignalsTests(unittest.TestCase):
         self.assertEqual(condition_signals([80], CROSSES_ABOVE, 70), [False])
         self.assertEqual(condition_signals([], CROSSES_ABOVE, 70), [])
 
+    def test_is_above_for_several_candles_is_true_from_the_last_of_them_on(self) -> None:
+        # Four candles over the level, one on it, and three more over it.
+        values = [60, 71, 72, 73, 74, 70, 75, 76, 77]
+        self.assertEqual(
+            condition_signals(values, IS_ABOVE, 70, 2),
+            [False, False, True, True, True, False, False, True, True],
+        )
+        self.assertEqual(
+            condition_signals(values, IS_ABOVE, 70, 3),
+            [False, False, False, True, True, False, False, False, True],
+        )
+        self.assertEqual(condition_signals(values, IS_ABOVE, 70, 4), [False] * 4 + [True] + [False] * 4)
+        self.assertEqual(condition_signals(values, IS_ABOVE, 70, 5), [False] * 9)
+
+    def test_is_below_for_several_candles_is_true_from_the_last_of_them_on(self) -> None:
+        values = [40, 29, 28, 27, 26, 30, 25, 24, 23]
+        self.assertEqual(
+            condition_signals(values, IS_BELOW, 30, 2),
+            [False, False, True, True, True, False, False, True, True],
+        )
+        self.assertEqual(
+            condition_signals(values, IS_BELOW, 30, 3),
+            [False, False, False, True, True, False, False, False, True],
+        )
+        self.assertEqual(condition_signals(values, IS_BELOW, 30, 5), [False] * 9)
+
+    def test_a_crossing_for_several_candles_is_true_only_on_the_last_of_them(self) -> None:
+        # The indicator goes over the level for four candles, for two, and then for three.
+        values = [60, 71, 72, 73, 74, 65, 80, 81, 69, 90, 91, 92]
+        self.assertEqual(
+            condition_signals(values, CROSSES_ABOVE, 70, 2),
+            [False, False, True, False, False, False, False, True, False, False, True, False],
+        )
+        self.assertEqual(
+            condition_signals(values, CROSSES_ABOVE, 70, 3),
+            [False, False, False, True, False, False, False, False, False, False, False, True],
+        )
+        self.assertEqual(condition_signals(values, CROSSES_ABOVE, 70, 4), [False] * 4 + [True] + [False] * 7)
+        self.assertEqual(condition_signals(values, CROSSES_ABOVE, 70, 5), [False] * 12)
+        # The same under a level.
+        values = [40, 29, 28, 27, 26, 35, 20, 19, 31, 10, 9, 8]
+        self.assertEqual(
+            condition_signals(values, CROSSES_BELOW, 30, 2),
+            [False, False, True, False, False, False, False, True, False, False, True, False],
+        )
+        self.assertEqual(
+            condition_signals(values, CROSSES_BELOW, 30, 3),
+            [False, False, False, True, False, False, False, False, False, False, False, True],
+        )
+
+    def test_the_candle_that_crosses_the_level_is_the_first_of_the_candles(self) -> None:
+        # The second candle is on the level, so the third is the one that crosses it.
+        self.assertEqual(
+            condition_signals([60, 70, 71, 72, 73], CROSSES_ABOVE, 70, 3), [False, False, False, False, True])
+        self.assertEqual(
+            condition_signals([40, 30, 29, 28, 27], CROSSES_BELOW, 30, 3), [False, False, False, False, True])
+
+    def test_candles_beyond_the_level_are_counted_again_after_one_that_is_not(self) -> None:
+        # Two candles over the level, one on it and two more over it are never three in a row.
+        for condition in (IS_ABOVE, CROSSES_ABOVE):
+            self.assertEqual(
+                condition_signals([60, 71, 72, 70, 73, 74], condition, 70, 3), [False] * 6, condition)
+        for condition in (IS_BELOW, CROSSES_BELOW):
+            self.assertEqual(
+                condition_signals([40, 29, 28, 30, 27, 26], condition, 30, 3), [False] * 6, condition)
+
+    def test_a_candle_without_a_value_ends_the_candles_in_a_row(self) -> None:
+        values = [60, 71, 72, None, 73, 74, 75]
+        self.assertEqual(condition_signals(values, IS_ABOVE, 70, 3), [False] * 6 + [True])
+        # The candle after it is the first with a value again, which is not a crossing.
+        self.assertEqual(condition_signals(values, CROSSES_ABOVE, 70, 3), [False] * 7)
+        self.assertEqual(condition_signals(values, CROSSES_ABOVE, 70, 2), [False, False, True] + [False] * 4)
+
+    def test_candles_in_a_row_from_the_first_value_on_are_not_a_crossing(self) -> None:
+        values = [None, 80, 81, 82, 60, 83, 84, 85]
+        self.assertEqual(condition_signals(values, CROSSES_ABOVE, 70, 3), [False] * 7 + [True])
+        self.assertEqual(
+            condition_signals(values, IS_ABOVE, 70, 3),
+            [False, False, False, True, False, False, False, True],
+        )
+        self.assertEqual(condition_signals([80, 81, 82], CROSSES_ABOVE, 70, 3), [False] * 3)
+        self.assertEqual(condition_signals([80, 81, 82], IS_ABOVE, 70, 3), [False, False, True])
+
+    def test_more_candles_than_any_run_has_is_never_true(self) -> None:
+        values = [50, 80, 80, 80, 20, 20, 20]
+        for condition in CONDITIONS:
+            self.assertEqual(condition_signals(values, condition, 50, 4), [False] * 7, condition)
+            self.assertEqual(condition_signals(values, condition, 50, 9999), [False] * 7, condition)
+            self.assertEqual(condition_signals([], condition, 50, 3), [], condition)
+        self.assertEqual(condition_signals(values, CROSSES_ABOVE, 50, 3), [False] * 3 + [True] + [False] * 3)
+        self.assertEqual(condition_signals(values, CROSSES_BELOW, 50, 3), [False] * 6 + [True])
+
+    def test_one_candle_is_the_condition_on_its_own(self) -> None:
+        values = [None, 60, 75, 80, 70, 71, 71, 69, None, 72, 30, 80]
+        for condition in CONDITIONS:
+            for_one = condition_signals(values, condition, 70, 1)
+            self.assertEqual(for_one, condition_signals(values, condition, 70), condition)
+        self.assertEqual(
+            condition_signals(values, CROSSES_ABOVE, 70, 1),
+            [False, False, True, False, False, True, False, False, False, False, False, True],
+        )
+
+    def test_a_value_that_is_not_a_number_is_on_neither_side_of_the_level(self) -> None:
+        values = [math.nan, 80, 81, 60, 82, 83]
+        self.assertEqual(condition_signals(values, IS_ABOVE, 70), [False, True, True, False, True, True])
+        self.assertEqual(condition_signals(values, IS_ABOVE, 70, 2), [False, False, True, False, False, True])
+        # The candle after it has not come from the level or from the other side of it.
+        self.assertEqual(condition_signals(values, CROSSES_ABOVE, 70), [False] * 4 + [True, False])
+        self.assertEqual(condition_signals(values, CROSSES_ABOVE, 70, 2), [False] * 5 + [True])
+        values = [math.nan, 20, 19, 40, 18, 17]
+        self.assertEqual(condition_signals(values, CROSSES_BELOW, 30), [False] * 4 + [True, False])
+        self.assertEqual(condition_signals(values, CROSSES_BELOW, 30, 2), [False] * 5 + [True])
+
 
 class IndicatorValuesTests(unittest.TestCase):
     @classmethod
@@ -267,6 +534,116 @@ class IndicatorValuesTests(unittest.TestCase):
         self.assertEqual(indicator_values(rows, RSI, 9999), [None] * 5)
         self.assertEqual(indicator_values([], RSI, 7), [])
         self.assertEqual(indicator_values([], ADX, 14), [])
+
+
+class BandValuesTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.rows = load_price_rows()
+
+    def test_the_bands_are_the_ones_the_chart_draws(self) -> None:
+        for period, multiplier in ((20, "2"), (10, "1.5"), (2, "0.1")):
+            _, upper, lower = Indicators(price_data=self.rows).calculate_bollinger(period, float(multiplier))
+            self.assertEqual(
+                band_values(self.rows, period, Decimal(multiplier)), {UPPER_BAND: upper, LOWER_BAND: lower})
+
+    def test_the_bands_are_standard_deviations_from_the_average_close(self) -> None:
+        closes = [row[4] for row in self.rows]
+        bands = band_values(self.rows, 20, Decimal("2.5"))
+        self.assertEqual(set(bands), set(BANDS))
+        for index in (19, 20, 500, len(closes) - 1):
+            window = closes[index - 19:index + 1]
+            average, deviation = statistics.fmean(window), statistics.pstdev(window)
+            self.assertAlmostEqual(bands[UPPER_BAND][index], average + 2.5 * deviation, places=9)
+            self.assertAlmostEqual(bands[LOWER_BAND][index], average - 2.5 * deviation, places=9)
+
+    def test_the_first_rows_have_no_bands(self) -> None:
+        for band in band_values(self.rows, 20, Decimal(2)).values():
+            self.assertEqual(len(band), len(self.rows))
+            self.assertEqual(band[:19], [None] * 19)
+            self.assertNotIn(None, band[19:])
+        none = {UPPER_BAND: [None] * 5, LOWER_BAND: [None] * 5}
+        self.assertEqual(band_values(self.rows[:5], 20, Decimal(2)), none)
+        self.assertEqual(band_values(self.rows[:5], 9999, Decimal(2)), none)
+        self.assertEqual(band_values([], 20, Decimal(2)), {UPPER_BAND: [], LOWER_BAND: []})
+
+
+class BandSignalsTests(unittest.TestCase):
+    def test_is_above_and_is_below_compare_each_close_with_the_band_of_its_candle(self) -> None:
+        rows = closing_at(10, 12, 12, 9, 11)
+        band = [11, 11, 12.5, 10, 10.5]
+        self.assertEqual(band_signals(rows, band, IS_ABOVE), [False, True, False, False, True])
+        self.assertEqual(band_signals(rows, band, IS_BELOW), [True, False, True, True, False])
+
+    def test_a_crossing_is_only_on_the_candle_that_closes_beyond_the_band(self) -> None:
+        rows = closing_at(10, 12, 13, 9, 9, 8, 12)
+        band = [11] * 7
+        self.assertEqual(
+            band_signals(rows, band, CROSSES_ABOVE), [False, True, False, False, False, False, True])
+        self.assertEqual(
+            band_signals(rows, band, CROSSES_BELOW), [False, False, False, True, False, False, False])
+
+    def test_a_band_that_moves_past_the_close_is_crossed_too(self) -> None:
+        # The close stays at 10 while the band rises from under it to over it, and then falls back.
+        rows = closing_at(10, 10, 10, 10, 10)
+        band = [9, 9.5, 10.5, 11, 9]
+        self.assertEqual(band_signals(rows, band, CROSSES_BELOW), [False, False, True, False, False])
+        self.assertEqual(band_signals(rows, band, CROSSES_ABOVE), [False, False, False, False, True])
+
+    def test_a_close_on_the_band_is_on_neither_side_of_it(self) -> None:
+        rows = closing_at(10, 11, 11, 12, 11, 10)
+        band = [11] * 6
+        self.assertEqual(band_signals(rows, band, IS_ABOVE), [False, False, False, True, False, False])
+        self.assertEqual(band_signals(rows, band, IS_BELOW), [True, False, False, False, False, True])
+        # The crossing is on the candle that leaves the band for the far side.
+        self.assertEqual(band_signals(rows, band, CROSSES_ABOVE), [False, False, False, True, False, False])
+        self.assertEqual(band_signals(rows, band, CROSSES_BELOW), [False, False, False, False, False, True])
+
+    def test_a_candle_without_a_band_is_never_true(self) -> None:
+        rows = closing_at(10, 10, 12, 13)
+        for condition in CONDITIONS:
+            self.assertEqual(band_signals(rows, [None] * 4, condition), [False] * 4, condition)
+        band = [None, None, 11, 11]
+        self.assertEqual(band_signals(rows, band, IS_ABOVE), [False, False, True, True])
+        # The first candle with a band is not a crossing.
+        self.assertEqual(band_signals(rows, band, CROSSES_ABOVE), [False] * 4)
+        self.assertEqual(band_signals([], [], CROSSES_ABOVE), [])
+
+    def test_several_candles_are_closes_in_a_row_beyond_the_band_of_each(self) -> None:
+        on_third = [False, False, True, False, False, False]
+        on_fourth = [False, False, False, True, False, False]
+        # The band rises with the closes, which are over it from the second candle to the fourth
+        # and on the last.
+        rows = closing_at(10, 12, 13, 14, 11, 13)
+        band = [11, 11, 12, 13, 12, 12]
+        self.assertEqual(band_signals(rows, band, IS_ABOVE, 2), [False, False, True, True, False, False])
+        self.assertEqual(band_signals(rows, band, IS_ABOVE, 3), on_fourth)
+        self.assertEqual(band_signals(rows, band, CROSSES_ABOVE, 2), on_third)
+        self.assertEqual(band_signals(rows, band, CROSSES_ABOVE, 3), on_fourth)
+        for condition in (IS_ABOVE, CROSSES_ABOVE):
+            self.assertEqual(band_signals(rows, band, condition, 4), [False] * 6, condition)
+        # The same under a band that falls with the closes.
+        rows = closing_at(10, 8, 7, 6, 9, 7)
+        band = [9, 9, 8, 7, 8, 8]
+        self.assertEqual(band_signals(rows, band, IS_BELOW, 2), [False, False, True, True, False, False])
+        self.assertEqual(band_signals(rows, band, IS_BELOW, 3), on_fourth)
+        self.assertEqual(band_signals(rows, band, CROSSES_BELOW, 2), on_third)
+        self.assertEqual(band_signals(rows, band, CROSSES_BELOW, 3), on_fourth)
+
+    def test_a_close_on_the_band_ends_the_closes_in_a_row(self) -> None:
+        rows = closing_at(10, 12, 12, 11, 12, 12, 12)
+        band = [11] * 7
+        self.assertEqual(band_signals(rows, band, IS_ABOVE, 3), [False] * 6 + [True])
+        self.assertEqual(band_signals(rows, band, CROSSES_ABOVE, 3), [False] * 6 + [True])
+        self.assertEqual(
+            band_signals(rows, band, CROSSES_ABOVE, 2), [False, False, True, False, False, True, False])
+
+    def test_closes_in_a_row_from_the_first_band_on_are_not_a_crossing(self) -> None:
+        rows = closing_at(10, 12, 12, 12, 10, 12, 12)
+        band = [None, 11, 11, 11, 11, 11, 11]
+        self.assertEqual(
+            band_signals(rows, band, IS_ABOVE, 2), [False, False, True, True, False, False, True])
+        self.assertEqual(band_signals(rows, band, CROSSES_ABOVE, 2), [False] * 6 + [True])
 
 
 class RuleTradesTests(unittest.TestCase):
@@ -499,6 +876,62 @@ class RuleTradesTests(unittest.TestCase):
         strategy = RuleStrategy((), (SELL_RULE,), Decimal(10), Decimal(5))
         self.assertEqual(self.rsi_trades([20] * 4, opening_at(10, 11, 12, 13), strategy), [])
 
+    def test_a_buy_rule_for_several_candles_buys_at_the_open_after_the_last_of_them(self) -> None:
+        strategy = RuleStrategy((Rule(RSI, 7, CROSSES_BELOW, Decimal(30), 3),), (SELL_RULE,))
+        rows = opening_at(10, 11, 12, 13, 14, 15)
+        # RSI falls below 30 on the second candle and is still there on the fourth.
+        values = [50, 25, 26, 27, 40, 40]
+        self.assertEqual(self.rsi_trades(values, rows, strategy), [RuleTrade(4, Decimal(14))])
+        # The rule for one candle buys two opens sooner.
+        self.assertEqual(self.rsi_trades(values, rows), [RuleTrade(2, Decimal(12))])
+        # Two candles under 30 are one too few, and so are two and two with a candle between them.
+        self.assertEqual(self.rsi_trades([50, 25, 26, 40, 40, 40], rows, strategy), [])
+        self.assertEqual(self.rsi_trades([50, 25, 26, 30, 27, 28], rows, strategy), [])
+        # The third candle under 30 is the last one, so no candle follows it to buy on.
+        self.assertEqual(self.rsi_trades([50, 50, 50, 25, 26, 27], rows, strategy), [])
+
+    def test_a_sell_rule_for_several_candles_sells_at_the_open_after_the_last_of_them(self) -> None:
+        strategy = RuleStrategy((BUY_RULE,), (Rule(RSI, 7, IS_ABOVE, Decimal(70), 2),))
+        rows = opening_at(10, 11, 12, 13, 14, 15, 16, 17)
+        # RSI is over 70 on the fourth candle alone, and then on the sixth and the seventh.
+        values = [50, 25, 40, 75, 60, 75, 80, 60]
+        self.assertEqual(
+            self.rsi_trades(values, rows, strategy),
+            [RuleTrade(2, Decimal(12), 7, Decimal(17), "RSI(7) is above 70 for 2 candles")],
+        )
+        # The rule for one candle sells after the fourth candle.
+        one = RuleStrategy((BUY_RULE,), (Rule(RSI, 7, IS_ABOVE, Decimal(70)),))
+        self.assertEqual(
+            self.rsi_trades(values, rows, one),
+            [RuleTrade(2, Decimal(12), 4, Decimal(14), "RSI(7) is above 70")],
+        )
+
+    def test_candles_from_before_the_buy_count_towards_a_sell_rule(self) -> None:
+        # RSI is over 70 on every candle and under 80 on the first four. The trade bought at
+        # the second open is sold after the third candle, which is the third in a row over 70.
+        strategy = RuleStrategy(
+            (Rule(RSI, 7, IS_BELOW, Decimal(80)),), (Rule(RSI, 7, IS_ABOVE, Decimal(70), 3),))
+        self.assertEqual(
+            self.rsi_trades([75, 75, 75, 75, 85, 85], opening_at(10, 11, 12, 13, 14, 15), strategy),
+            [
+                RuleTrade(1, Decimal(11), 3, Decimal(13), "RSI(7) is above 70 for 3 candles"),
+                RuleTrade(4, Decimal(14), 5, Decimal(15), "RSI(7) is above 70 for 3 candles"),
+            ],
+        )
+
+    def test_each_buy_rule_is_met_for_its_own_candles(self) -> None:
+        calm = Rule(ADX, 14, IS_BELOW, Decimal(25), 3)
+        strategy = RuleStrategy((Rule(RSI, 7, IS_BELOW, Decimal(30), 2), calm), (SELL_RULE,))
+        rows = opening_at(10, 11, 12, 13, 14, 15)
+        # RSI is under 30 on every candle. ADX is under 25 from the second, so for three on the fourth.
+        values = {(RSI, 7): [20] * 6, (ADX, 14): [30, 20, 20, 20, 20, 20]}
+        self.assertEqual(scripted_trades(values, rows, strategy), [RuleTrade(4, Decimal(14))])
+        # RSI falls below 30 on the second candle, so a crossing for two candles is true on the
+        # third alone, which is one candle before the ADX rule is true.
+        crossing = RuleStrategy((Rule(RSI, 7, CROSSES_BELOW, Decimal(30), 2), calm), (SELL_RULE,))
+        values = {(RSI, 7): [50, 20, 20, 20, 20, 20], (ADX, 14): [30, 20, 20, 20, 20, 20]}
+        self.assertEqual(scripted_trades(values, rows, crossing), [])
+
     def test_rules_that_share_an_indicator_and_a_period_share_its_values(self) -> None:
         strategy = RuleStrategy(
             (BUY_RULE, Rule(RSI, 14, IS_BELOW, Decimal(50))),
@@ -509,6 +942,74 @@ class RuleTradesTests(unittest.TestCase):
             rule_trades(rows, strategy)
         self.assertEqual(
             [call.args for call in values.call_args_list], [(rows, RSI, 7), (rows, RSI, 14)])
+
+    def test_bollinger_rules_that_share_a_period_and_a_multiplier_share_their_bands(self) -> None:
+        strategy = RuleStrategy(
+            (BAND_BUY_RULE, BandRule(10, Decimal(2), IS_BELOW, LOWER_BAND)),
+            (
+                BAND_SELL_RULE, BandRule(20, Decimal("2.0"), IS_ABOVE, LOWER_BAND),
+                BandRule(20, Decimal(3), IS_ABOVE, UPPER_BAND),
+            ),
+        )
+        rows = opening_at(10, 11, 12)
+        none = {UPPER_BAND: [None] * 3, LOWER_BAND: [None] * 3}
+        with mock.patch("strategy_rules.indicator_values") as values:
+            with mock.patch("strategy_rules.band_values", return_value=none) as bands:
+                rule_trades(rows, strategy)
+        self.assertEqual(
+            [call.args for call in bands.call_args_list],
+            [(rows, 20, Decimal(2)), (rows, 10, Decimal(2)), (rows, 20, Decimal(3))],
+        )
+        # A Bollinger rule needs the closes and no other indicator.
+        values.assert_not_called()
+
+    def test_bollinger_rules_are_worked_out_from_the_closes(self) -> None:
+        # With a period of 2 and half a standard deviation, the bands lie a quarter of the last
+        # change in the close from the average of the last two closes. A close that fell is
+        # under the lower band, one that rose is over the upper band, and one that stayed is
+        # on both.
+        rows = closing_at(10, 10, 8, 8, 12, 12, 12)
+        strategy = RuleStrategy(
+            (BandRule(2, Decimal("0.5"), CROSSES_BELOW, LOWER_BAND),),
+            (BandRule(2, Decimal("0.5"), CROSSES_ABOVE, UPPER_BAND),),
+        )
+        sold_by = "Bollinger(2, 0.5): close crosses above upper band"
+        self.assertEqual(
+            rule_trades(rows, strategy), [RuleTrade(3, Decimal("7.75"), 5, Decimal("11.75"), sold_by)])
+        # The fall is not a close over the upper band, and the rise is not one under the lower band.
+        swapped = RuleStrategy(strategy.sell_rules, strategy.buy_rules)
+        self.assertEqual(rule_trades(rows, swapped), [RuleTrade(5, Decimal("11.75"))])
+
+    def test_a_bollinger_rule_buys_with_the_rules_of_other_indicators(self) -> None:
+        # The close falls on the third and the fifth candle, and RSI is under 30 from the fourth.
+        rows = closing_at(10, 10, 8, 8, 7, 12, 12)
+        strategy = RuleStrategy(
+            (Rule(RSI, 7, IS_BELOW, Decimal(30)), BandRule(2, Decimal("0.5"), IS_BELOW, LOWER_BAND)),
+            (SELL_RULE, BandRule(2, Decimal("0.5"), IS_ABOVE, UPPER_BAND)),
+        )
+        sold_by = "Bollinger(2, 0.5): close is above upper band"
+        self.assertEqual(
+            self.rsi_trades([50, 50, 50, 20, 20, 20, 20], rows, strategy),
+            [RuleTrade(5, Decimal("11.75"), 6, Decimal("11.75"), sold_by)],
+        )
+
+    def test_bollinger_rules_for_several_candles_are_worked_out_from_the_closes(self) -> None:
+        # With the same bands, the close falls under the lower band three times in a row, and
+        # later rises over the upper band three times in a row.
+        rows = closing_at(10, 10, 9, 8, 7, 7, 8, 9, 10, 10)
+        strategy = RuleStrategy(
+            (BandRule(2, Decimal("0.5"), CROSSES_BELOW, LOWER_BAND, 3),),
+            (BandRule(2, Decimal("0.5"), CROSSES_ABOVE, UPPER_BAND, 3),),
+        )
+        sold_by = "Bollinger(2, 0.5): close crosses above upper band for 3 candles"
+        self.assertEqual(
+            rule_trades(rows, strategy), [RuleTrade(5, Decimal("6.75"), 9, Decimal("9.75"), sold_by)])
+        # Two closes under the band buy an open sooner, and three are too few for four.
+        two = RuleStrategy((BandRule(2, Decimal("0.5"), IS_BELOW, LOWER_BAND, 2),), strategy.sell_rules)
+        self.assertEqual(
+            rule_trades(rows, two), [RuleTrade(4, Decimal("6.75"), 9, Decimal("9.75"), sold_by)])
+        four = RuleStrategy((BandRule(2, Decimal("0.5"), IS_BELOW, LOWER_BAND, 4),), strategy.sell_rules)
+        self.assertEqual(rule_trades(rows, four), [])
 
     def test_the_indicators_are_worked_out_from_the_rows(self) -> None:
         # RSI(2) of these closes is 100 on the third candle, then 25, 16.67, 77.27 and 83.33.
@@ -527,6 +1028,19 @@ class RuleTradesTests(unittest.TestCase):
         self.assertEqual(rule_trades([], default_strategy()), [])
         self.assertEqual(rule_trades(candles(*[QUIET] * 7), default_strategy()), [])
         strategy = RuleStrategy((Rule(RSI, 9999, IS_BELOW, Decimal(100)),), (SELL_RULE,))
+        self.assertEqual(rule_trades(load_price_rows(), strategy), [])
+
+    def test_rows_too_few_for_the_bands_make_no_trades(self) -> None:
+        strategy = RuleStrategy((BAND_BUY_RULE,), (BAND_SELL_RULE,))
+        self.assertEqual(rule_trades([], strategy), [])
+        self.assertEqual(rule_trades(candles(*[QUIET] * 19), strategy), [])
+        # The twentieth candle is the first one with bands, so its close under the lower band
+        # has not crossed it. It is under the band all the same.
+        rows = closing_at(*[100] * 19, 50, 40)
+        self.assertEqual(rule_trades(rows, strategy), [])
+        under = RuleStrategy((BandRule(20, Decimal(2), IS_BELOW, LOWER_BAND),), (BAND_SELL_RULE,))
+        self.assertEqual(rule_trades(rows, under), [RuleTrade(20, Decimal("39.75"))])
+        strategy = RuleStrategy((BandRule(9999, Decimal(2), IS_BELOW, UPPER_BAND),), (BAND_SELL_RULE,))
         self.assertEqual(rule_trades(load_price_rows(), strategy), [])
 
 
@@ -583,23 +1097,47 @@ class RealPriceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.rows = load_price_rows()
-        highs, lows, closes = ([row[column] for row in cls.rows] for column in (2, 3, 4))
-        cls.values = {(RSI, period): wilder_rsi(closes, period) for period in (7, 14)}
-        cls.values[ADX, 14] = adx_components(highs, lows, closes, 14)[0]
+        highs, lows, cls.closes = ([row[column] for row in cls.rows] for column in (2, 3, 4))
+        cls.values = {(RSI, period): wilder_rsi(cls.closes, period) for period in (7, 14)}
+        cls.values[ADX, 14] = adx_components(highs, lows, cls.closes, 14)[0]
+        # The bands as the chart draws them, by their period and their multiplier.
+        cls.bands = {}
+        for period, multiplier in ((20, Decimal(2)), (10, Decimal("1.5"))):
+            _, upper, lower = Indicators(price_data=cls.rows).calculate_bollinger(period, float(multiplier))
+            cls.bands[period, multiplier] = {UPPER_BAND: upper, LOWER_BAND: lower}
 
-    def met(self, rule: Rule, index: int) -> bool:
-        """Whether the candle met the rule, worked out from the indicator on it and the one before."""
-        values = self.values[rule.indicator, rule.period]
-        now, before, level = values[index], values[index - 1] if index else None, float(rule.level)
+    def compared(self, rule: AnyRule, index: int) -> Optional[Tuple[float, float]]:
+        """What the rule compares on a candle: a value, and the level that it is held against.
+
+        A Bollinger rule holds the close against the band of that candle. None on a candle
+        that has no value yet.
+        """
+        if isinstance(rule, BandRule):
+            band = self.bands[rule.period, rule.multiplier][rule.band][index]
+            return None if band is None else (self.closes[index], band)
+        value = self.values[rule.indicator, rule.period][index]
+        return None if value is None else (value, float(rule.level))
+
+    def beyond(self, rule: AnyRule, index: int) -> Optional[bool]:
+        """Whether a candle left what the rule compares on the side of the level that the rule names.
+
+        None on a candle that has no value yet.
+        """
+        now = self.compared(rule, index)
         if now is None:
+            return None
+        value, level = now
+        return value > level if rule.condition in (IS_ABOVE, CROSSES_ABOVE) else value < level
+
+    def met(self, rule: AnyRule, index: int) -> bool:
+        """Whether the candle met the rule, worked out from its candles and the one before them."""
+        first = index - rule.candles + 1
+        if first < 0 or not all(self.beyond(rule, at) for at in range(first, index + 1)):
             return False
-        if rule.condition == IS_ABOVE:
-            return now > level
-        if rule.condition == IS_BELOW:
-            return now < level
-        if before is None:
-            return False
-        return before <= level < now if rule.condition == CROSSES_ABOVE else before >= level > now
+        if rule.condition in (IS_ABOVE, IS_BELOW):
+            return True
+        # A crossing came from a candle with a value on the level or on the other side of it.
+        return first > 0 and self.beyond(rule, first - 1) is False
 
     def check_trades(self, strategy: RuleStrategy) -> List[RuleTrade]:
         """Test the strategy and check each trade against the candles around it."""
@@ -663,6 +1201,8 @@ class RealPriceTests(unittest.TestCase):
         calm = Rule(ADX, 14, IS_BELOW, Decimal(25))
         trending = Rule(ADX, 14, CROSSES_ABOVE, Decimal(25))
         dip = Rule(RSI, 7, IS_BELOW, Decimal(30))
+        under = BandRule(10, Decimal("1.5"), IS_BELOW, LOWER_BAND)
+        over = BandRule(10, Decimal("1.5"), IS_ABOVE, UPPER_BAND)
         for strategy, count in (
             (default_strategy(), None),
             (RuleStrategy((rsi_14_buy,), (rsi_14_sell,)), None),
@@ -674,10 +1214,70 @@ class RealPriceTests(unittest.TestCase):
             (RuleStrategy((dip,), (trending, rsi_14_sell), Decimal(50), Decimal(20)), None),
             (RuleStrategy((dip, calm), (Rule(RSI, 7, IS_ABOVE, Decimal(50)),), Decimal(1), Decimal(1)), None),
             (RuleStrategy((Rule(RSI, 7, IS_ABOVE, Decimal(100)),), (SELL_RULE,)), 0),
+            (RuleStrategy((BAND_BUY_RULE,), (BAND_SELL_RULE,)), 17),
+            (RuleStrategy((BAND_BUY_RULE,), (BAND_SELL_RULE,), Decimal(10), Decimal(5)), None),
+            (RuleStrategy((BAND_BUY_RULE,), (), Decimal(20), Decimal(10)), None),
+            (RuleStrategy((under,), (over,)), None),
+            (RuleStrategy((dip, under), (SELL_RULE, over)), None),
+            (RuleStrategy((under, calm), (trending, over), Decimal(25), None), None),
+            # Bought on a close over the upper band and sold on one under the lower band.
+            (RuleStrategy((BAND_SELL_RULE,), (BAND_BUY_RULE,)), None),
         ):
             trades = self.check_trades(strategy)
             if count is not None:
                 self.assertEqual(len(trades), count, strategy)
+
+    def test_every_trade_follows_rules_for_several_candles(self) -> None:
+        def rsi(condition: str, level: int, count: int) -> Rule:
+            return Rule(RSI, 7, condition, Decimal(level), count)
+
+        def adx(condition: str, count: int) -> Rule:
+            return Rule(ADX, 14, condition, Decimal(25), count)
+
+        def band(condition: str, name: str, count: int) -> BandRule:
+            return BandRule(20, Decimal(2), condition, name, count)
+
+        def narrow(condition: str, name: str, count: int) -> BandRule:
+            return BandRule(10, Decimal("1.5"), condition, name, count)
+
+        under, over = narrow(IS_BELOW, LOWER_BAND, 2), narrow(IS_ABOVE, UPPER_BAND, 2)
+        for strategy, count in (
+            (RuleStrategy((rsi(CROSSES_BELOW, 30, 2),), (rsi(CROSSES_ABOVE, 70, 2),)), 11),
+            (RuleStrategy((rsi(CROSSES_BELOW, 30, 3),), (rsi(CROSSES_ABOVE, 70, 3),)), 8),
+            (RuleStrategy((rsi(CROSSES_BELOW, 30, 3),), (SELL_RULE,)), None),
+            (RuleStrategy((rsi(CROSSES_BELOW, 30, 5),), (rsi(CROSSES_ABOVE, 70, 5),)), None),
+            (RuleStrategy((rsi(IS_BELOW, 30, 2),), (rsi(IS_ABOVE, 70, 2),), Decimal(10), Decimal(5)), None),
+            (RuleStrategy((rsi(IS_BELOW, 30, 4),), (rsi(IS_ABOVE, 70, 3),)), None),
+            (RuleStrategy((band(CROSSES_BELOW, LOWER_BAND, 2),), (band(CROSSES_ABOVE, UPPER_BAND, 2),)), 11),
+            (RuleStrategy((band(CROSSES_BELOW, LOWER_BAND, 3),), (band(CROSSES_ABOVE, UPPER_BAND, 3),)), 7),
+            (RuleStrategy((band(IS_BELOW, LOWER_BAND, 2),), (band(IS_ABOVE, UPPER_BAND, 2),)), None),
+            (RuleStrategy((under,), (narrow(IS_ABOVE, UPPER_BAND, 3),)), None),
+            (RuleStrategy(
+                (narrow(CROSSES_BELOW, LOWER_BAND, 3),), (narrow(CROSSES_ABOVE, UPPER_BAND, 2),)), None),
+            (RuleStrategy(
+                (rsi(IS_BELOW, 30, 2), adx(IS_BELOW, 5)), (rsi(CROSSES_ABOVE, 70, 2), adx(CROSSES_ABOVE, 3)),
+            ), None),
+            (RuleStrategy((under, adx(IS_BELOW, 3)), (adx(CROSSES_ABOVE, 2), over), Decimal(25), None), None),
+            # The file has fewer candles than the buy rule asks for.
+            (RuleStrategy((rsi(IS_BELOW, 100, 9999),), (SELL_RULE,)), 0),
+        ):
+            trades = self.check_trades(strategy)
+            if count is not None:
+                self.assertEqual(len(trades), count, strategy)
+
+    def test_a_rule_for_one_more_candle_is_true_one_candle_later(self) -> None:
+        # It is true there when that candle leaves the indicator beyond the level too.
+        sides = {CROSSES_ABOVE: IS_ABOVE, IS_ABOVE: IS_ABOVE, CROSSES_BELOW: IS_BELOW, IS_BELOW: IS_BELOW}
+        for key, level in (((RSI, 7), 30), ((RSI, 14), 70), ((ADX, 14), 25)):
+            values = self.values[key]
+            for condition, side in sides.items():
+                beyond = condition_signals(values, side, level)
+                signals = condition_signals(values, condition, level)
+                for count in range(2, 9):
+                    earlier, signals = signals, condition_signals(values, condition, level, count)
+                    after = [False] + [was and now for was, now in zip(earlier, beyond[1:])]
+                    self.assertEqual(signals, after, (key, condition, count))
+                    self.assertIn(True, signals, (key, condition, count))
 
 
 if __name__ == "__main__":
