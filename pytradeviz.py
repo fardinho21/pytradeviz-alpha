@@ -186,8 +186,6 @@ class PyTradeViz:
     price_data: Optional[List[List[Any]]] = None
     price_data_object: Optional[Dict[str, Any]] = None
     chart_grid_space_x: float = 15000 
-    #TODO: calculate the chart_grid_space_y inside the init function
-    #the value will be equal to the highest p
     chart_grid_space_y: float = 1000
     base_chart_height: int = 1000
     chart_grid_divider_v: int = 30
